@@ -1,6 +1,25 @@
 # Phase 2 Plan, Orders Crawl
 
-_Drafted 2026-04-26. Awaiting Troy's explicit approval before any data calls run. **This phase is the first one that pulls real client PII.**_
+_Drafted 2026-04-26. Block A executed 2026-04-26 21:15 UTC. Block B and Block C **paused** pending review and architecture-update aware re-plan._
+
+## Status update, 2026-04-26 21:48 UTC
+
+**Block A complete.** Findings logged in `06-phase2-block-a-findings.md` (separate file). Headlines:
+
+- `/orders` returned stubs (id/show/modified), same pattern as `/agents`. Total of **61,387 orders** in the lifetime list (37,032 open + 24,355 completed).
+- ISN's `after=` filter appears to be **ignored** on `/orders`. Documented as platform issue #8.
+- `/orders/footprints?all=true` returned an empty array, not a useful cross-inspector view.
+- Stub records cannot be stratified directly. Sampling needs detail calls first.
+
+**Architecture pivot, also 2026-04-26 21:48 UTC.** Multi-business Pattern B accepted. The Phase 2 results doc, when written, must map ISN's order/client/agent shapes into the new multi-business schema (`specs/01-schema.draft.ts` v2), specifically:
+
+- ISN `client` -> `customers` (shared, no business_id) + `customer_businesses[business=safehouse]`
+- ISN `agent` -> `transaction_participants` (shared) + `inspection_participants` rows on the relevant inspections
+- ISN `order` property fields -> `properties` (shared) + `property_businesses[business=safehouse]`
+- ISN `order` -> `inspections (business_id=safehouse)`
+- ISN `inspector` (a user) -> `users` + `user_businesses[business=safehouse]` + `user_roles[user, business=safehouse, role=technician]`
+
+No new ISN calls are needed for the architecture pivot. The same data, mapped differently.
 
 ## Goal
 
