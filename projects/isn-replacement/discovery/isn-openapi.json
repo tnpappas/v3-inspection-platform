@@ -1,0 +1,4103 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "8400",
+    "termsOfService": "http://www.inspectionsupport.net/privacy/",
+    "title": "ISN REST API",
+    "description": "This is the v1 API for the Inspection Support Network.",
+    "contact": {
+      "name": "Inspection Support Engineering",
+      "url": "https://www.inspectionsupport.net/company/about/",
+      "email": "help@inspectionsupport.net"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://inspectionsupport.com/{companyKey}/rest",
+      "description": "ISN API (company-specific)",
+      "variables": {
+        "companyKey": {
+          "description": "Your ISN company key",
+          "default": "test"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "util",
+      "description": "Utility calls for the ISN.  Calls which do not impact objects on the ISN but rather provide or control information",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "offices",
+      "description": "Offices represent a collection of users at a geographic position",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "users",
+      "description": "Users are users relative to ISN and typically can login and perform actions on the ISN.  (e.g. inspectors, office managers, owners)",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "agents",
+      "description": "Agents are Inspector's pseudo clients - they manage the relationships and details of the transaction and typically there is an agent representing the buyer and the seller",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "agencies",
+      "description": "Agents belong to a single 'Agency' which has an office location and contact information",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "clients",
+      "description": "Clients are Inspector's clients - typically a home buyer or someone needing an inspection",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "contacts",
+      "description": "Dynamic contacts attached to an order.  Zero or more contacts can be associated with an Order (Inspection)",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "escrowofficers",
+      "description": "Escrow officers are typically included in the transaction",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "escrowoffices",
+      "description": "Escrow Offices are collections of Escrow Officers",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "insuranceagents",
+      "description": "Insurance Agents are involved in the transaction in some areas and for some types of inspections.",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "orders",
+      "description": "Orders are Inspection objects/encapsulations.  A single inspection booked at specific date/time and location.",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "contacttypes",
+      "description": "Contact Types of divisions of the contact list.  A contact belongs to one type of contact.",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "ordertypes",
+      "description": "Order Types of divisions of the orders.  An order can belong to one type of order type.",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    },
+    {
+      "name": "calendar",
+      "description": "Operations on the inspectors/users calendar(s).",
+      "externalDocs": {
+        "description": "Find out more",
+        "url": "http://development.isnadmin.com"
+      }
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BasicAuth": {
+        "type": "http",
+        "scheme": "basic"
+      }
+    },
+    "schemas": {
+      "CalendarAvailableSlotEntry": {
+        "$ref": "./models/CalendarAvailableSlotEntry.json"
+      },
+      "CalendarAvailableSlotsResponse": {
+        "$ref": "./models/CalendarAvailableSlotsResponse.json"
+      },
+      "OrderTypeEntry": {
+        "$ref": "./models/OrderTypeEntry.json"
+      },
+      "OrderTypesResponse": {
+        "$ref": "./models/OrderTypesResponse.json"
+      },
+      "ContactTypeEntry": {
+        "$ref": "./models/ContactTypeEntry.json"
+      },
+      "ContactTypesResponse": {
+        "$ref": "./models/ContactTypesResponse.json"
+      },
+      "CompanyKeyResponse": {
+        "$ref": "./models/CompanyKeyResponse.json"
+      },
+      "MeResponse": {
+        "$ref": "./models/MeResponse.json"
+      },
+      "WebDeliveryUrlResponse": {
+        "$ref": "./models/WebDeliveryUrlResponse.json"
+      },
+      "FeeEntry": {
+        "$ref": "./models/FeeEntry.json"
+      },
+      "FootprintEntry": {
+        "$ref": "./models/FootprintEntry.json"
+      },
+      "FootprintResponse": {
+        "$ref": "./models/FootprintResponse.json"
+      },
+      "Order": {
+        "$ref": "./models/Order.json"
+      },
+      "OrderEntry": {
+        "$ref": "./models/OrderEntry.json"
+      },
+      "OrderCompleteResponse": {
+        "$ref": "./models/OrderCompleteResponse.json"
+      },
+      "OrderHistoryEntry": {
+        "$ref": "./models/OrderHistoryEntry.json"
+      },
+      "OrderHistoryResponse": {
+        "$ref": "./models/OrderHistoryResponse.json"
+      },
+      "OrderResponse": {
+        "$ref": "./models/OrderResponse.json"
+      },
+      "OrdersResponse": {
+        "$ref": "./models/OrdersResponse.json"
+      },
+      "OrderFeeEntry": {
+        "$ref": "./models/OrderFeeEntry.json"
+      },
+      "OrderFeesResponse": {
+        "$ref": "./models/OrderFeesResponse.json"
+      },
+      "CouponEntry": {
+        "$ref": "./models/CouponEntry.json"
+      },
+      "OrderControlEntry": {
+        "$ref": "./models/OrderControlEntry.json"
+      },
+      "ServicesEntry": {
+        "$ref": "./models/ServicesEntry.json"
+      },
+      "ActionResponse": {
+        "$ref": "./models/ActionResponse.json"
+      },
+      "OfficeEntry": {
+        "$ref": "./models/OfficeEntry.json"
+      },
+      "OfficesResponse": {
+        "$ref": "./models/OfficesResponse.json"
+      },
+      "AttachmentUploadResponse": {
+        "$ref": "./models/AttachmentUploadResponse.json"
+      },
+      "Agent": {
+        "$ref": "./models/Agent.json"
+      },
+      "AgentEntry": {
+        "$ref": "./models/AgentEntry.json"
+      },
+      "AgentResponse": {
+        "$ref": "./models/AgentResponse.json"
+      },
+      "AgentsResponse": {
+        "$ref": "./models/AgentsResponse.json"
+      },
+      "AgentsSearchResponse": {
+        "$ref": "./models/AgentsSearchResponse.json"
+      },
+      "InsuranceAgent": {
+        "$ref": "./models/InsuranceAgent.json"
+      },
+      "InsuranceAgentEntry": {
+        "$ref": "./models/InsuranceAgentEntry.json"
+      },
+      "InsuranceAgentResponse": {
+        "$ref": "./models/InsuranceAgentResponse.json"
+      },
+      "InsuranceAgentsResponse": {
+        "$ref": "./models/InsuranceAgentsResponse.json"
+      },
+      "InsuranceAgentsSearchResponse": {
+        "$ref": "./models/InsuranceAgentsSearchResponse.json"
+      },
+      "Agency": {
+        "$ref": "./models/Agency.json"
+      },
+      "AgencyEntry": {
+        "$ref": "./models/AgencyEntry.json"
+      },
+      "AgencyResponse": {
+        "$ref": "./models/AgencyResponse.json"
+      },
+      "AgenciesResponse": {
+        "$ref": "./models/AgenciesResponse.json"
+      },
+      "AgenciesSearchResponse": {
+        "$ref": "./models/AgenciesSearchResponse.json"
+      },
+      "Client": {
+        "$ref": "./models/Client.json"
+      },
+      "ClientEntry": {
+        "$ref": "./models/ClientEntry.json"
+      },
+      "ClientResponse": {
+        "$ref": "./models/ClientResponse.json"
+      },
+      "ClientsResponse": {
+        "$ref": "./models/ClientsResponse.json"
+      },
+      "ClientsSearchResponse": {
+        "$ref": "./models/ClientsSearchResponse.json"
+      },
+      "Contact": {
+        "$ref": "./models/Contact.json"
+      },
+      "ContactEntry": {
+        "$ref": "./models/ContactEntry.json"
+      },
+      "ContactOrderEntry": {
+        "$ref": "./models/ContactOrderEntry.json"
+      },
+      "ContactResponse": {
+        "$ref": "./models/ContactResponse.json"
+      },
+      "ContactsResponse": {
+        "$ref": "./models/ContactsResponse.json"
+      },
+      "ContactsSearchResponse": {
+        "$ref": "./models/ContactsSearchResponse.json"
+      },
+      "User": {
+        "$ref": "./models/User.json"
+      },
+      "UserEntry": {
+        "$ref": "./models/UserEntry.json"
+      },
+      "UserResponse": {
+        "$ref": "./models/UserResponse.json"
+      },
+      "UsersResponse": {
+        "$ref": "./models/UsersResponse.json"
+      },
+      "UsersSearchResponse": {
+        "$ref": "./models/UsersSearchResponse.json"
+      },
+      "UserUpdateCreateResponse": {
+        "$ref": "./models/UserUpdateCreateResponse.json"
+      },
+      "EscrowOfficer": {
+        "$ref": "./models/EscrowOfficer.json"
+      },
+      "EscrowOfficerEntry": {
+        "$ref": "./models/EscrowOfficerEntry.json"
+      },
+      "EscrowOfficerResponse": {
+        "$ref": "./models/EscrowOfficerResponse.json"
+      },
+      "EscrowOfficersResponse": {
+        "$ref": "./models/EscrowOfficersResponse.json"
+      },
+      "EscrowOfficersSearchResponse": {
+        "$ref": "./models/EscrowOfficersSearchResponse.json"
+      },
+      "EscrowOffice": {
+        "$ref": "./models/EscrowOffice.json"
+      },
+      "EscrowOfficeEntry": {
+        "$ref": "./models/EscrowOfficeEntry.json"
+      },
+      "EscrowOfficeResponse": {
+        "$ref": "./models/EscrowOfficeResponse.json"
+      },
+      "EscrowOfficesResponse": {
+        "$ref": "./models/EscrowOfficesResponse.json"
+      },
+      "EscrowOfficesSearchResponse": {
+        "$ref": "./models/EscrowOfficesSearchResponse.json"
+      },
+      "BuildResponse": {
+        "$ref": "./models/BuildResponse.json"
+      },
+      "TimeResponse": {
+        "$ref": "./models/TimeResponse.json"
+      },
+      "UploadReportResponse": {
+        "$ref": "./models/UploadReportResponse.json"
+      },
+      "AddUrlResponse": {
+        "$ref": "./models/AddUrlResponse.json"
+      },
+      "ErrorResponse": {
+        "$ref": "./models/ErrorResponse.json"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Authentication failed or credentials missing",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "unauthorized": {
+                "value": {
+                  "status": "error",
+                  "message": "Unauthorized"
+                }
+              }
+            }
+          }
+        }
+      },
+
+      "Forbidden": {
+        "description": "Authenticated but not allowed to perform this action",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+
+      "NotFound": {
+        "description": "Requested resource was not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+
+      "ValidationError": {
+        "description": "Request validation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+
+      "UnexpectedError": {
+        "description": "An unexpected error occurred",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/companykey": {
+      "get": {
+        "tags": ["util"],
+        "summary": "Fetch the company key for this ISN",
+        "description": "Fetch the company key for this ISN. The company key is a unique identifier for this ISN.",
+        "responses": {
+          "200": {
+            "description": "A Company Key Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CompanyKeyResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": ["util"],
+        "summary": "Fetch the info about the authenticated user",
+        "description": "Fetch the info about the authenticated user. This includes details such as the user's name, email, and roles.",
+        "responses": {
+          "200": {
+            "description": "A Me Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MeResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/offices": {
+      "get": {
+        "tags": ["offices"],
+        "summary": "Fetch offices for this ISN",
+        "description": "Fetch the list of offices for this ISN.  Each user belongs to an office but may login to one or more offices.",
+        "responses": {
+          "200": {
+            "description": "An OfficesResponse",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OfficesResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/attachmentupload": {
+      "put": {
+        "tags": ["attachments"],
+        "summary": "Uploads an attachment to the ISN and associate it to an order",
+        "description": "Uploads a binary file, typically a PDF, and associates it with an order.  This is done by providing the correct parameters to associate it to an order and then placing the binary stream in the body of the PUT request.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "required": true,
+            "description": "the UUID/ID of the inspection/order",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "mimetype",
+            "required": true,
+            "description": "the mimetype of the file - if not provided we will attempt to detect it but typically safer to provide it - e.g. application/pdf",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "filename",
+            "required": true,
+            "description": "the filename of your attachment",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "required": true,
+            "description": "title of the file - this is textual title of what you are uploading - warning: this is made publicly visible to clients and agents",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "description",
+            "required": true,
+            "description": "description of the file - this is textual description of what you are uploading",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "public",
+            "required": true,
+            "description": "if this is set to TRUE then the attachment is listed as public and the client/agent can see the attachment - typically suggested for 3rd parties",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upload result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AttachmentUploadResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+
+    "/orders": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Find all of the orders",
+        "description": "Find all of the orders, it will return an array with client entries containing an identifier, a boolean if the client is currently deleted and the last modified date/time in local time",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "completed",
+            "required": false,
+            "description": "[optional] - return a list of orders which are completed",
+            "schema": { "type": "boolean" }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "description": "[optional] - return a list of orders which were modified after the date/time provided",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "datetimeafter",
+            "required": false,
+            "description": "[optional] - return a list of orders which are after the date/time provided (date/time of the inspection)",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "required": false,
+            "description": "[optional] - comma list of IDs to return",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "agentuuid",
+            "required": false,
+            "description": "[optional] - return a list of orders which are associated with this real estate agent's uuid",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "insuranceagentuuid",
+            "required": false,
+            "description": "[optional] - return a list of orders which are associated with this insurance agent's uuid",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of orders.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrdersResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/orders/footprints": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Fetch all footprints",
+        "description": "Find all of the user's footprints",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "all",
+            "required": false,
+            "description": "[optional] - return a list of footprints which include all inspectors. Only users who can view all inspections can use this parameter.",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of order footprints (a list of FootprintEntries).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FootprintResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/orders/search": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Find an order",
+        "description": "Find orders based on a query string. At least one parameter must be provided to search.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "address1",
+            "required": false,
+            "type": "string",
+            "description": "[ optional ] - search time to look for the order by address1"
+          },
+          {
+            "in": "query",
+            "name": "datetime",
+            "required": false,
+            "type": "string",
+            "description": "[ optional ] - search time to look for the order by date/time of the inspection"
+          },
+          {
+            "in": "query",
+            "name": "reportnumber",
+            "required": false,
+            "type": "string",
+            "description": "[ optional ] - search time to look for the order by reportnumber"
+          },
+          {
+            "in": "query",
+            "name": "year",
+            "required": false,
+            "type": "string",
+            "description": "[ optional ] - search time to look for the order by year"
+          },
+          {
+            "in": "query",
+            "name": "client",
+            "required": false,
+            "type": "string",
+            "description": "[ optional ] - search time to look for the order by client id (send in client's UUID/id)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of orders.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrdersResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/orders/addreporturl": {
+      "put": {
+        "tags": ["orders"],
+        "summary": "Add web url to an Order",
+        "description": "If you deliver the report via a web URL you can call 'addreporturl' to add in a report URL to an order.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "required": true,
+            "description": "ID of the order to add the URL to"
+          },
+          {
+            "in": "query",
+            "name": "url",
+            "required": true,
+            "description": "the url of the report"
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "required": false,
+            "description": "The title of the report.  e.g. 'Inspection Report' or 'Termite Report'"
+          },
+          {
+            "in": "query",
+            "name": "public",
+            "required": false,
+            "description": "Boolean if the report should be public or private, typically you'll want to send a true here"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An echo response of the URL added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddUrlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/orders/uploadreport": {
+      "put": {
+        "tags": ["orders"],
+        "operationId": "ordersUploadReport",
+        "summary": "Uploads an report to the ISN and associate it to an order",
+        "description": "Uploads a binary file, typically a PDF, and associates it with an order.  This is done by providing the correct parameters to associate it to an order and then placing the binary stream in the body of the PUT request.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the UUID/ID of the inspection/order"
+          },
+          {
+            "in": "query",
+            "name": "mimetype",
+            "type": "string",
+            "required": true,
+            "description": "the mimetype of the file - if not provided we will attempt to detect it but typically safer to provide it - e.g. application/pdf"
+          },
+          {
+            "in": "query",
+            "name": "filename",
+            "type": "string",
+            "required": true,
+            "description": "the filename of your attachment"
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "type": "string",
+            "required": true,
+            "description": "title of the file - this is textual title of what you are uploading - warning: this is made publicly visible to clients and agents"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An echo response of the report added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadReportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/order/{id}": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Fetch an order",
+        "description": "Fetch a specific order",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "description": "the id (uuid) of the order to fetch",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "path",
+            "name": "withallcontrols",
+            "required": false,
+            "description": "whether to include all controls in the order response",
+            "schema": { "type": "boolean" }
+          },
+          {
+            "in": "path",
+            "name": "withpropertyphoto",
+            "required": false,
+            "description": "whether to include the property photo in the order response",
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An order response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["orders"],
+        "summary": "Delete an order",
+        "description": "Delete an order",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "description": "the id (uuid) of the order to delete",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "User does not have the DELETE_INCOMPLETE_INSPECTIONS permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "forbidden" },
+                    "message": {
+                      "type": "string",
+                      "example": "Not authorized to delete this order."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["orders"],
+        "summary": "Updates an order",
+        "description": "Updates an order.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "description": "the id (uuid) of the order to update",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OrderEntry" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/order/complete/{id}": {
+      "post": {
+        "tags": ["orders"],
+        "summary": "Completes an order",
+        "description": "Completes an order.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the order to update"
+          },
+          {
+            "in": "query",
+            "name": "reportnumber",
+            "type": "string",
+            "required": false,
+            "description": "[optional] - the report number of the order"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An OrderCompleteResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderCompleteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/order": {
+      "post": {
+        "tags": ["orders"],
+        "summary": "Creates an order",
+        "description": "Creates an order.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OrderEntry" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/order/fees/{id}": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Fetch the order fees from an order",
+        "description": "Will return all of the order fees associated with the given order id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id of the order to fetch the fees for"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An OrderFees response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderFeesResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/order/history/{id}": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Fetch the order history from an order",
+        "description": "Will return all of the order history objects associated with the given order id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id of the order to fetch the fees for"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An OrderHistory response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderHistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/order/webdelivery/{id}": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Fetch the web delivery url from an order",
+        "description": "returns the URL for the order's web delivery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id of the order to fetch the url for"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An WebDeliveryUrl response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebDeliveryUrlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agents": {
+      "get": {
+        "tags": ["agents"],
+        "summary": "Find all of the agents",
+        "description": "Find all of the agents, it will return an array with agent entries containing an identifier, a boolean if the agent is currently deleted and the last modified date/time in local time",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "description": "[optional] - return a list of agents which were modified after the date/time provided",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "required": false,
+            "description": "[optional] - comma list of IDs to return",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of agents.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AgentsResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agents/search": {
+      "get": {
+        "tags": ["agents"],
+        "summary": "Find an agent",
+        "description": "Find agents based on a query string",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "description": "term to use for the agent search",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of agents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentsSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agent/{id}": {
+      "get": {
+        "tags": ["agents"],
+        "summary": "Find an agent",
+        "description": "Find an agent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "description": "the id (uuid) of the agent to fetch",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An agent response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AgentResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["agents"],
+        "summary": "Delete an agent",
+        "description": "Delete an agent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "description": "the id (uuid) of the agent to delete",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["agents"],
+        "summary": "Updates an agent",
+        "description": "Updates an agent.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "description": "the id (uuid) of the agent to update",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Agent fields to update",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AgentEntry" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agent": {
+      "post": {
+        "tags": ["agents"],
+        "summary": "Creates an agent",
+        "description": "Creates an agent.",
+        "requestBody": {
+          "required": true,
+          "description": "Agent to create",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AgentEntry" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agent/lookup": {
+      "get": {
+        "tags": ["agents"],
+        "summary": "Find one agent by an email lookup",
+        "description": "Find a single agent by email address",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "description": "the email address to use during the lookup",
+            "schema": { "type": "string", "format": "email" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An agent response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AgentResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/insuranceagents/search": {
+      "get": {
+        "tags": ["insuranceagents"],
+        "summary": "Find a insurance agent",
+        "description": "Find insurance agent based on a query string",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
+            "description": "term to use for the insurance agent search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of InsuranceAgents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsuranceAgentsSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/insuranceagent/{id}": {
+      "get": {
+        "tags": ["insuranceagents"],
+        "summary": "Find a insurance agent",
+        "description": "Find a insurance agent",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the insurance agent to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A InsuranceAgent response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsuranceAgentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["insuranceagents"],
+        "summary": "Delete a insurance agent",
+        "description": "Delete a insurance agent",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the insurance agent to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["insuranceagents"],
+        "summary": "Updates a insurance agent",
+        "description": "Updates a insurance agent.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the insurance agent to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "InsuranceAgent fields to update",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsuranceAgent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/insuranceagents": {
+      "get": {
+        "tags": ["insuranceagents"],
+        "summary": "Find all of the insurance agents",
+        "description": "Find all of the insuranceagents, it will return an array with insurance agent entries containing an identifier, a boolean if the insurance agent is currently deleted and the last modified date/time in local time",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - return a list of insurance agent which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of InsuranceAgentResponse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsuranceAgentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/insuranceagent/lookup": {
+      "get": {
+        "tags": ["insuranceagents"],
+        "summary": "Find one insurance agent by an email lookup",
+        "description": "Find a single insurance agent by email address",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "the email address to use during the lookup"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A InsuranceAgent response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsuranceAgentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agencies": {
+      "get": {
+        "tags": ["agencies"],
+        "summary": "Find all of the agencys",
+        "description": "Find all of the agencies, it will return an array with agency entries containing an identifier, a boolean if the agency is currently deleted and the last modified date/time in local time",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - return a list of agency which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "type": "string",
+            "required": false,
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of AgencyResponse.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AgenciesResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agencies/search": {
+      "get": {
+        "tags": ["agencies"],
+        "summary": "Find an agency",
+        "description": "Find agency based on a query string",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
+            "description": "term to use for the agency search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of Agencies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgenciesSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agency/{id}": {
+      "get": {
+        "tags": ["agencies"],
+        "summary": "Find a agency",
+        "description": "Find a agency",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the agency to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Agency response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AgencyResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["agencies"],
+        "summary": "Delete a agency",
+        "description": "Delete a agency",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the agency to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["agencies"],
+        "summary": "Updates an agency",
+        "description": "Updates an agency.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the agency to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Agency fields to update",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Agency" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/agency": {
+      "post": {
+        "tags": ["agencies"],
+        "summary": "Creates an agency",
+        "description": "Creates an agency.",
+
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Agency"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "schema": {
+              "$ref": "#/components/schemas/ActionResponse"
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/clients": {
+      "get": {
+        "tags": ["clients"],
+        "summary": "Find all of the clients",
+        "description": "Find all of the clients, it will return an array with client entries containing an identifier, a boolean if the client is currently deleted and the last modified date/time in local time",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - return a list of clients which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of clients.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ClientsResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/clients/search": {
+      "get": {
+        "tags": ["clients"],
+        "summary": "Find a client",
+        "description": "Find clients based on a query string",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
+            "description": "term to use for the client search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of clients.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientsSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/client/{id}": {
+      "get": {
+        "tags": ["clients"],
+        "summary": "Find a client",
+        "description": "Find a client",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "type": "string",
+            "description": "the id (uuid) of the client to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A client response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ClientResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["clients"],
+        "summary": "Delete a client",
+        "description": "Delete a client",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the client to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["clients"],
+        "summary": "Updates a client",
+        "description": "Updates a client.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the client to update"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/client/": {
+      "post": {
+        "tags": ["clients"],
+        "summary": "Creates an client",
+        "description": "Creates an client.",
+
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Client"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/client/lookup": {
+      "get": {
+        "tags": ["clients"],
+        "summary": "Find one client by an email lookup",
+        "description": "Find a single client by email address",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "type": "string",
+            "description": "the email address to use during the lookup"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A client response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ClientResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "tags": ["users"],
+        "summary": "Find all of the users",
+        "description": "Find all of the users, it will return an array with user entries containing an identifier, a boolean if the user is currently deleted and the last modified date/time in local time",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - return a list of user which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "type": "string",
+            "required": false,
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A UsersResponse.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UsersResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/users/search": {
+      "get": {
+        "tags": ["users"],
+        "summary": "Find a user",
+        "description": "Find user based on a query string",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
+            "description": "term to use for the user search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A UserSearchResponse.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UsersSearchResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/user/{id}": {
+      "get": {
+        "tags": ["users"],
+        "summary": "Find a user",
+        "description": "Find a user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the user to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A User response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["users"],
+        "summary": "Updates a user",
+        "description": "Updates a user.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the user to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "User object to update",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserUpdateCreateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/user": {
+      "post": {
+        "tags": ["users"],
+        "summary": "Creates a user",
+        "description": "Creates a user.",
+        "requestBody": {
+          "required": true,
+          "description": "User object to create",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A UserUpdateCreateResponse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserUpdateCreateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contacts": {
+      "get": {
+        "tags": ["contacts"],
+        "summary": "Find all of the contacts",
+        "description": "Find all of the contacts, it will return an array with contact entries containing an identifier, a boolean if the contact is currently deleted and the last modified date/time in local time",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - return a list of contact which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of ContactResponse.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContactResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contacts/search": {
+      "get": {
+        "tags": ["contacts"],
+        "summary": "Find a contact",
+        "description": "Find contact based on a query string",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
+            "description": "term to use for the contact search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of Contacts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contact/{id}": {
+      "get": {
+        "tags": ["contacts"],
+        "summary": "Find a contact",
+        "description": "Find a contact",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the contact to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Contact response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContactResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["contacts"],
+        "summary": "Delete a contact",
+        "description": "Delete a contact",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the contact to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["contacts"],
+        "summary": "Updates a contact",
+        "description": "Updates a contact.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the contact to update"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contact/": {
+      "post": {
+        "tags": ["contacts"],
+        "summary": "Creates an contact",
+        "description": "Creates an contact.",
+
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contact/lookup": {
+      "get": {
+        "tags": ["contacts"],
+        "summary": "Find one contact by an email lookup",
+        "description": "Find a single contact by email address",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "type": "string",
+            "description": "the email address to use during the lookup"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Contact response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContactResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowofficers": {
+      "get": {
+        "tags": ["escrowofficers"],
+        "summary": "Find all of the escrow officers",
+        "description": "Find all of the escrowofficers, it will return an array with escrow officer entries containing an identifier, a boolean if the escrow officer is currently deleted and the last modified date/time in local time",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - return a list of escrow officer which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "required": false,
+            "type": "string",
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of EscrowOfficerResponse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowofficers/search": {
+      "get": {
+        "tags": ["escrowoffices"],
+        "summary": "Find an escrow office",
+        "description": "Find escrow office based on a query string",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "type": "string",
+            "required": false,
+            "description": "term to use for the escrow office search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of Escrow Offices.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficesSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowofficer/{id}": {
+      "get": {
+        "tags": ["escrowofficers"],
+        "summary": "Find a escrow officer",
+        "description": "Find a escrow officer",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the escrow officer to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A EscrowOfficer response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["escrowofficers"],
+        "summary": "Delete a escrow officer",
+        "description": "Delete a escrow officer",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the escrow officer to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["escrowofficers"],
+        "summary": "Updates a escrow officer",
+        "description": "Updates a escrow officer.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the escrow officer to update"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowofficer": {
+      "post": {
+        "tags": ["escrowofficers"],
+        "summary": "Creates an escrow officer",
+        "description": "Creates an escrow officer.",
+
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EscrowOfficer" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowofficer/lookup": {
+      "get": {
+        "tags": ["escrowofficers"],
+        "summary": "Find one escrow officer by an email lookup",
+        "description": "Find a single escrow officer by email address",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "type": "string",
+            "description": "the email address to use during the lookup"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A EscrowOfficer response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowoffices": {
+      "get": {
+        "tags": ["escrowoffices"],
+        "summary": "Find all of the escrow offices",
+        "description": "Find all of the escrow offices, it will return an array with escrow office entries containing an identifier, a boolean if the escrow office is currently deleted and the last modified date/time in local time",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "type": "string",
+            "required": false,
+            "description": "[optional] - return a list of escrow office which were modified after the date/time provided"
+          },
+          {
+            "in": "query",
+            "name": "uuids",
+            "type": "string",
+            "required": false,
+            "description": "[optional] - comma list of IDs to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of EscrowOffices entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowoffices/search": {
+      "get": {
+        "tags": ["escrowoffices"],
+        "summary": "Find an escrow office",
+        "description": "Find escrow office based on a query string",
+
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "type": "string",
+            "description": "term to use for the escrow office search"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of Escrow Offices.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficesSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowoffice/{id}": {
+      "get": {
+        "tags": ["escrowoffices"],
+        "summary": "Find a escrow office",
+        "description": "Find a escrow office",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the escrow office to fetch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A EscrowOffice response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscrowOfficeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "delete": {
+        "tags": ["escrowoffices"],
+        "summary": "Delete a escrow office",
+        "description": "Delete a escrow office",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the escrow office to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["escrowoffices"],
+        "summary": "Updates an escrow office",
+        "description": "Updates an escrow office.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the escrow office to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EscrowOffice" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/escrowoffice": {
+      "post": {
+        "tags": ["escrowoffices"],
+        "summary": "Creates an escrow office",
+        "description": "Creates an escrow office.",
+
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EscrowOffice" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/build": {
+      "get": {
+        "tags": ["util"],
+        "summary": "Fetch build number of this ISN",
+        "description": "Fetch the build number of this ISN.  ISN increments the build number when new updates are released.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "A Build Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/time": {
+      "get": {
+        "tags": ["util"],
+        "summary": "Fetch the date/time for this ISN",
+        "description": "Fetch the the date/time for this ISN in both UTC and client-local time adjusted for their timezone",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "A Time Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TimeResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contacttype": {
+      "post": {
+        "tags": ["contacttypes"],
+        "summary": "Creates an contact type",
+        "description": "Creates an contact type.",
+
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContactTypeEntry" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contacttypes/": {
+      "get": {
+        "tags": ["contacttypes"],
+        "summary": "Find all of the contact types",
+        "description": "Find all of the contact types, it will return an array with contact type entries containing an identifier, a boolean if the contact type is currently deleted and the last modified date/time in local time",
+
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "A list of contacttypes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactTypesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/contacttype/{id}": {
+      "delete": {
+        "tags": ["contacttypes"],
+        "summary": "Delete a contact type",
+        "description": "Delete a contact type",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the contact type to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["contacttypes"],
+        "summary": "Updates a contact type",
+        "description": "Updates a contact type.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the contact type to update"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ContactTypeEntry" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/ordertype": {
+      "post": {
+        "tags": ["ordertypes"],
+        "summary": "Creates an order type",
+        "description": "Creates an order type.",
+
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderTypeEntry" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/ordertypes/": {
+      "get": {
+        "tags": ["ordertypes"],
+        "summary": "Find all of the order types",
+        "description": "Find all of the order types, it will return an array with order type entries containing an identifier, a boolean if the order type is currently deleted and the last modified date/time in local time",
+
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "A list of ordertypes.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderTypesResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/ordertype/{id}": {
+      "delete": {
+        "tags": ["ordertypes"],
+        "summary": "Delete a order type",
+        "description": "Delete a order type",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the order type to delete"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      },
+      "post": {
+        "tags": ["ordertypes"],
+        "summary": "Updates a order type",
+        "description": "Updates a order type.",
+
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "the id (uuid) of the order type to update"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrderTypeEntry" }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An action response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ActionResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/calendar/availableslots": {
+      "get": {
+        "tags": ["calendar"],
+        "summary": "Obtain all available slots",
+        "description": "Obtain all available slots for an inspector based on zip, services and date offsets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "inspector",
+            "required": true,
+            "description": "the id (uuid) of the inspector to use in the lookup",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "daysahead",
+            "required": false,
+            "description": "daysahead is the number of days that is added to the TODAY+OFFSET and essentially the end date.  The system will look between (TODAY + OFFSET) and (TODAY + OFFSET + DAYSAHEAD)",
+            "schema": { "type": "number" }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "description": "offset is the number of days that is added to today.  The system will look between (TODAY + OFFSET) and (TODAY + OFFSET + DAYSAHEAD)",
+            "schema": { "type": "number" }
+          },
+          {
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "description": "a comma separated list of the services to look for",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "description": "zip code used for lookup",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Calendar Available Slots response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarAvailableSlotsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    },
+    "/availableslots": {
+      "get": {
+        "tags": ["calendar"],
+        "summary": "Obtain all available slots",
+        "description": "Alias of /calendar/availableslots that matches the RestController action name.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "inspector",
+            "required": true,
+            "description": "the id (uuid) of the inspector to use in the lookup",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "daysahead",
+            "required": false,
+            "description": "daysahead is the number of days that is added to the TODAY+OFFSET and essentially the end date.  The system will look between (TODAY + OFFSET) and (TODAY + OFFSET + DAYSAHEAD)",
+            "schema": { "type": "number" }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "description": "offset is the number of days that is added to today.  The system will look between (TODAY + OFFSET) and (TODAY + OFFSET + DAYSAHEAD)",
+            "schema": { "type": "number" }
+          },
+          {
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "description": "a comma separated list of the services to look for",
+            "schema": { "type": "string" }
+          },
+          {
+            "in": "query",
+            "name": "zip",
+            "required": false,
+            "description": "zip code used for lookup",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Calendar Available Slots response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarAvailableSlotsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/UnexpectedError"
+          }
+        }
+      }
+    }
+  },
+  "security": [{ "BasicAuth": [] }],
+  "externalDocs": {
+    "description": "Find out more about the Inspection Support Network",
+    "url": "https://www.inspectionsupport.net"
+  }
+}

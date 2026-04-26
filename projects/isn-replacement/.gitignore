@@ -1,0 +1,8 @@
+# Raw API dumps may contain client PII. Never commit.
+discovery/raw/
+discovery/csv/
+
+# Just in case
+*.env
+*.secret
+secrets/
