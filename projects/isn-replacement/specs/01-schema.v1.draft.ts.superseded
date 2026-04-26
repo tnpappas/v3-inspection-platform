@@ -1,4 +1,24 @@
 /**
+ * 01-schema.v1.draft.ts.superseded
+ *
+ * STATUS: SUPERSEDED on 2026-04-26 by the Pattern B multi-business architecture.
+ * Do not import. Do not migrate. Kept as design history only.
+ *
+ * What changed in v2 (see specs/01-schema.draft.ts):
+ * - Added `businesses` table; tables that were Safe-House-only now carry business_id.
+ * - Added `user_businesses` junction; users belong to one or more businesses.
+ * - `user_roles` gained `business_id`; role meaning is per-business.
+ * - Split `contacts` into shared `customers` and shared `transaction_participants`.
+ * - New shared `properties` table; property metadata moved off `inspections`.
+ * - `agencies` is shared with `agency_businesses` junction.
+ * - `customer_businesses` and `property_businesses` junctions track cross-business activity.
+ *
+ * Why: per Troy's directive 2026-04-26 21:46 UTC, the rebuild is a multi-business
+ * platform from the foundation, not Safe House only. See:
+ *   ../decisions/2026-04-26-multi-business-architecture.md
+ *
+ * Original v1 header below.
+ *
  * 01-schema.draft.ts
  *
  * STATUS: DRAFT, awaiting Troy's review. Do not import. Do not migrate.
