@@ -50,6 +50,24 @@ Observed during Phase 0 of the crawl on 2026-04-26:
 
 Production is **153 builds ahead** of what ISN publishes as their API documentation. Anything added, removed, or changed in those 153 builds is invisible to integrators relying on the doc. Combined with item 1 (broken server URL in the spec), the published documentation is unreliable as a contract.
 
+## 6. Bulk list endpoints return undocumented "stub" records
+
+Observed during Phase 1 on `/agents`:
+
+- Response contained 8,934 agent records.
+- Each record had only three fields: `id`, `show`, `modified`.
+- Real agent fields (name, email, phone, agency) require a separate call to `GET /agent/{id}` per record.
+
+The OpenAPI spec implies `/agents` returns the full agent shape (referenced via the `Agent` schema in `definitions`). It does not. The stub form is not announced anywhere in the spec or response payload.
+
+Integrator impact: anyone planning a crawl based on the spec underestimates call count by orders of magnitude. We hit this on the first list endpoint we tried.
+
+## 7. Production response fields not declared in the spec
+
+The `/agents` response included `count` and `after` keys at the top level. Neither is in the OpenAPI spec. The `after` value of `"na"` (rather than null or omitted) hints at an incremental-sync pattern that production supports but the documentation does not describe.
+
+This is the inverse of issue #5: production has features the spec does not document, in addition to the spec describing things production no longer matches.
+
 ---
 
 ## Why this matters for the rebuild

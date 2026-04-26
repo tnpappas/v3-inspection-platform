@@ -6,3 +6,7 @@ discovery/csv/
 *.env
 *.secret
 secrets/
+
+# Replit project snapshot (binary + extracted source). Not our code, do not commit.
+replit-snapshot/
+replit-snapshot.tar.gz
