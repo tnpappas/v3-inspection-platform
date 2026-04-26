@@ -1,0 +1,3 @@
+# Migration outputs may contain PII. Never commit.
+*.csv
+*-classification.*

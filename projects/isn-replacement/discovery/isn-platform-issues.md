@@ -68,6 +68,22 @@ The `/agents` response included `count` and `after` keys at the top level. Neith
 
 This is the inverse of issue #5: production has features the spec does not document, in addition to the spec describing things production no longer matches.
 
+## 9. No first-class cancellation workflow, ISN overloads delete
+
+Observed during Phase 2 augment, 2026-04-26:
+
+- ISN's UI "Cancel order" action does NOT set the `canceled` flag on the order. It sets `deleteddatetime` and `deletedby`, then hides the order (`show=no`).
+- All three sampled hidden orders had: `show=no`, `canceled=no`, `complete=no`, but `deleteddatetime` populated.
+- The `canceled` boolean field is therefore unused in practice (or used for an undocumented internal purpose). Across 15 sampled orders, no record had `canceled=yes`.
+
+Integrator impact:
+
+- A naive integration filtering by `canceled=yes` will find zero cancelled orders.
+- A naive integration treating `deleteddatetime` as a literal hard delete will throw away the cancellation history.
+- The two concepts ("cancelled by staff for business reasons" and "deleted from the system") are conflated into one action.
+
+The correct interpretation is: `deleteddatetime IS NOT NULL` means the order is cancelled. The `canceled` flag is a vestigial field that should not be trusted. This is not documented anywhere we have found.
+
 ## 8. Documented `after=` filter on `/orders` is silently ignored
 
 Observed during Phase 2 Block A on 2026-04-26:
