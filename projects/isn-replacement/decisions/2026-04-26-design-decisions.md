@@ -4,7 +4,9 @@ Decisions made before drafting `specs/01-schema.ts`. Locked unless we revisit ex
 
 ## D1. Role model: junction table with derived primary role
 
-User-to-role is many-to-many. A new table `user_roles (user_id, role)` carries the assignments. UI gets a derived "primary role" via a deterministic priority order (e.g., `owner > operations_manager > inspector > client_success > viewer`) computed on read.
+**Updated 2026-04-26 21:48 UTC** by the multi-business architecture decision (`2026-04-26-multi-business-architecture.md`). Role assignments are now per-business: `user_roles (user_id, business_id, role)`. The derived "primary role" is computed within the business context the user is currently viewing.
+
+User-to-role is many-to-many. A new table `user_roles (user_id, business_id, role)` carries the assignments. UI gets a derived "primary role" via a deterministic priority order (e.g., `owner > operations_manager > inspector > client_success > viewer`) computed on read.
 
 Reasoning:
 
@@ -82,6 +84,8 @@ The `/users` crawl shows 19 users flagged `inspector: "Yes"` AND `show: "Yes"`. 
 Captured as a required step in `specs/05-migration-plan.md` when that document is drafted.
 
 ### Sizing flag, productization risk
+
+**Updated 2026-04-26 21:48 UTC** by the multi-business architecture decision. Headroom targets below were sized for Safe House alone. Three businesses' shared `customers`, `properties`, `users`, and `transaction_participants` make these tables 2-3x larger than Safe-House-only. Still within headroom. No index or pattern changes. See `2026-04-26-multi-business-architecture.md`.
 
 Logged 2026-04-26: the headroom targets above are appropriate for **Safe House internal use over a 5 year horizon**. They are likely **undersized** if the rebuild is later productized and licensed to other inspection companies. Not a decision tonight. Revisit before any productization commitment. The architectural patterns chosen (UUID PKs, junction tables for many-to-many, indexed FKs, cursor pagination on unbounded lists) do not preclude a larger ceiling, they just have not been validated for it. A productization track would prompt a fresh sizing pass at:
 
