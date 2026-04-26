@@ -68,6 +68,24 @@ The `/agents` response included `count` and `after` keys at the top level. Neith
 
 This is the inverse of issue #5: production has features the spec does not document, in addition to the spec describing things production no longer matches.
 
+## 8. Documented `after=` filter on `/orders` is silently ignored
+
+Observed during Phase 2 Block A on 2026-04-26:
+
+- `GET /orders?completed=false&after=2026-01-26T...` returned **37,032 records** when a 90-day window at the documented volume should return ~600.
+- `GET /orders?completed=true&after=2026-03-27T...` returned **24,355 records** when a 30-day window should return ~200.
+- Both responses included `"after": "na"` at the top level, the same string value seen on `/agents` (issue #7).
+
+The spec advertises `after=<datetime>` as an incremental-sync hook on `/orders`. In practice the filter is ignored and the endpoint returns the entire history. There is no error, no warning, no indication that the filter was discarded.
+
+Integrator impact:
+
+- Anyone implementing incremental sync against ISN's documented `after=` parameter will instead pull every order in the system on every call. At any non-trivial scale this is a 10x to 100x bandwidth and processing overshoot.
+- The combined response size on this Safe House tenant alone was 9.4 MB for two list calls.
+- Catastrophic for clients on slow connections, mobile devices, or with timeout limits.
+
+The pattern, with `/agents` (issue #6) and `/orders` (this issue), is that ISN's bulk list endpoints have **broken or missing pagination**. There is no documented way to retrieve a delta. Every poll is full-history.
+
 ---
 
 ## Why this matters for the rebuild
