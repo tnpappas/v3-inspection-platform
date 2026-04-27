@@ -289,16 +289,28 @@ export const businesses = pgTable("businesses", {
 // users (one account, Pattern 1)
 // =============================================================================
 // Table: users
-// Security:      PII heavy (name, email, phone, address, license, photo). passwordHash always encrypted (scrypt). Other PII columns: column-level encryption decision deferred to security spec finalization. Soft-delete: yes via status='inactive' (no delete columns; users are not removed, just deactivated). RLS: account-scoped; a user can never see users from other accounts.
-// Scalability:   No partition key. Indexes on (account_id, status), (account_id, email) unique. Expected row count at 10x: ~30,000 across 50 accounts. Within a single account, ~600.
-// Multi-business: ACCOUNT-SCOPED. A user belongs to exactly one account (Pattern 1, locked 2026-04-27 12:53 UTC). Membership in businesses within that account via user_businesses junction.
+// Security:      PII heavy (name, email, phone, address, license, photo).
+//                Credentials live in user_credentials, NOT here. Login security
+//                state lives in user_security. MFA factors in user_mfa_factors.
+//                Email verification status here as `emailVerifiedAt`. Other PII
+//                columns: column-level encryption decision deferred to security
+//                spec finalization. Soft-delete: yes via status='inactive' (no
+//                delete columns; users are not removed, just deactivated).
+//                RLS: account-scoped; a user can never see users from other
+//                accounts.
+// Scalability:   No partition key. Indexes on (account_id, status),
+//                (account_id, email) unique. Expected row count at 10x: ~30,000
+//                across 50 accounts. Within a single account, ~600.
+// Multi-business: ACCOUNT-SCOPED. A user belongs to exactly one account
+//                 (Pattern 1, locked 2026-04-27 12:53 UTC). Membership in
+//                 businesses within that account via user_businesses junction.
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
 
   email: varchar("email", { length: 255 }).notNull(),                // PII: contact_email | unique within account, not globally
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),  // null = unverified; required for sensitive notifications
   username: varchar("username", { length: 100 }),                    // PII: name (sometimes user identity) | ISN: username, unique within account
-  passwordHash: varchar("password_hash", { length: 255 }),           // PII: credentials
 
   // Identity
   firstName: varchar("first_name", { length: 100 }),                 // PII: name
@@ -341,12 +353,127 @@ export const users = pgTable("users", {
 }));
 
 // =============================================================================
+// user_credentials (split from users)
+// =============================================================================
+// Table: user_credentials
+// Security:      Credentials only. passwordHash always encrypted (scrypt). One
+//                row per credential type per user (today: 'password'; future:
+//                'sso_google', 'sso_microsoft', 'passkey'). Reads of this table
+//                produce read_sensitive audit entries (S5). Soft-delete: NO;
+//                rotation produces a new row in user_credentials_history. RLS:
+//                account-scoped via user FK chain.
+// Scalability:   PK on (user_id, kind). Index on (user_id) for the common
+//                "fetch all credentials for this user" lookup. Expected row
+//                count at 10x: ~60,000 (30,000 users x ~2 credentials avg as
+//                SSO and passkeys land).
+// Multi-business: SHARED via user. A credential is per user; it works across
+//                 every business the user belongs to in their account.
+export const userCredentials = pgTable("user_credentials", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: varchar("kind", { length: 50 }).notNull(),                   // "password" | "sso_google" | "sso_microsoft" | "passkey" (future); see rationale
+
+  // For kind='password': scrypt format `<hex-hash>.<hex-salt>` (current Replit pattern)
+  // For SSO: external provider subject identifier (e.g., Google's sub claim).
+  // For passkey: WebAuthn credential ID + public key (split into separate columns when implemented).
+  secret: text("secret"),                                            // PII: credentials | nullable for SSO/passkey rows that store identifiers in other columns
+  externalSubject: varchar("external_subject", { length: 255 }),     // SSO subject identifier; null for password
+
+  // Rotation tracking
+  rotatedAt: timestamp("rotated_at", { withTimezone: true }),        // last time this credential was changed; null until first rotation
+  requireRotation: boolean("require_rotation").default(false).notNull(),  // forces a rotation on next login
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.kind] }),
+  byUser: index("user_credentials_user_idx").on(t.userId),
+  byKindSubject: uniqueIndex("user_credentials_kind_subject_unique").on(t.kind, t.externalSubject).where(sql`${t.externalSubject} IS NOT NULL`),
+}));
+
+// =============================================================================
+// user_security (login security state, separate from credentials)
+// =============================================================================
+// Table: user_security
+// Security:      Login activity, lockout, IP history. PII: IP addresses are PII
+//                in some jurisdictions. Read-audit applies. Soft-delete: NO;
+//                row exists 1:1 with users.
+// Scalability:   PK is user_id (one row per user). Updated on every login
+//                attempt. Expected row count at 10x: equals users count.
+// Multi-business: SHARED via user. Login activity is per user, not per
+//                 business.
+export const userSecurity = pgTable("user_security", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+
+  // Failed login tracking
+  failedLoginCount: integer("failed_login_count").default(0).notNull(),
+  lastFailedLoginAt: timestamp("last_failed_login_at", { withTimezone: true }),
+  lastFailedLoginIp: varchar("last_failed_login_ip", { length: 64 }),  // PII: address (IP can be PII per GDPR)
+
+  // Successful login tracking
+  lastSuccessfulLoginAt: timestamp("last_successful_login_at", { withTimezone: true }),
+  lastSuccessfulLoginIp: varchar("last_successful_login_ip", { length: 64 }),  // PII: address
+  lastSuccessfulUserAgent: text("last_successful_user_agent"),
+
+  // Lockout
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),    // null = not locked
+  lockedReason: text("locked_reason"),
+
+  // Password reset enforcement
+  requirePasswordReset: boolean("require_password_reset").default(false).notNull(),
+  passwordResetTokenHash: varchar("password_reset_token_hash", { length: 255 }),
+  passwordResetExpiresAt: timestamp("password_reset_expires_at", { withTimezone: true }),
+
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  byLockedUntil: index("user_security_locked_until_idx").on(t.lockedUntil),
+}));
+
+// =============================================================================
+// user_mfa_factors (multi-factor authentication)
+// =============================================================================
+// Table: user_mfa_factors
+// Security:      mfaSecret encrypted at application layer (NOT stored in plain
+//                text or DB-encrypted only). Read-audit applies. Soft-delete:
+//                NO; revocation is a literal DELETE plus audit_log entry.
+//                One user can have multiple factors (e.g., TOTP + backup codes
+//                + WebAuthn).
+// Scalability:   PK on id. Index on user_id. Expected row count at 10x: ~50,000
+//                (most users will have 1-2 factors when MFA enforced).
+// Multi-business: SHARED via user. MFA is per user.
+export const userMfaFactors = pgTable("user_mfa_factors", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+
+  kind: varchar("kind", { length: 50 }).notNull(),                   // "totp" | "backup_codes" | "webauthn" | "sms" (future); see rationale
+  label: varchar("label", { length: 100 }),                          // user-supplied ("My phone", "Yubikey 5C")
+
+  // For TOTP: encrypted shared secret (application-layer encryption).
+  // For WebAuthn: credential public key + ID (split when implemented).
+  // For backup_codes: encrypted JSON array of one-time codes.
+  secret: text("secret"),                                            // PII: credentials
+
+  enabled: boolean("enabled").default(true).notNull(),               // disabled factors stay for audit but cannot be used
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  byUser: index("user_mfa_factors_user_idx").on(t.userId),
+  byUserEnabled: index("user_mfa_factors_user_enabled_idx").on(t.userId, t.enabled),
+}));
+
+// =============================================================================
 // user_businesses (membership within account)
 // =============================================================================
 // Table: user_businesses
 // Security:      No PII. RLS: account-scoped through both ends. A user only sees their own memberships and (if admin) memberships of users in businesses they manage within their account.
-// Scalability:   PK (user_id, business_id). Indexes on (business_id), (user_id). Expected row count at 10x: ~50,000.
+// Scalability:   PK (user_id, business_id). Index on (business_id) for the "users in business X" query. The user-side lookup is served by the PK leading column. Expected row count at 10x: ~50,000.
 // Multi-business: JUNCTION. Adding a new business adds rows here for relevant staff. No schema change.
+//
+// REVIEW(troy 2026-04-27 14:24 UTC) item 6 PENDING: is_primary moved to a future
+// user_preferences table per Hatch's recommendation; awaiting Troy's confirm.
+// For now isPrimary remains here so the schema does not regress; will be moved
+// in a separate commit if confirmed.
 export const userBusinesses = pgTable("user_businesses", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -356,7 +483,8 @@ export const userBusinesses = pgTable("user_businesses", {
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.businessId] }),
   byBusiness: index("user_businesses_business_idx").on(t.businessId),
-  byUser: index("user_businesses_user_idx").on(t.userId),
+  // Standalone (user_id) index dropped per review item 8: PK leading column
+  // serves user-side lookups.
   primaryUnique: uniqueIndex("user_businesses_primary_unique").on(t.userId).where(sql`${t.isPrimary} = true`),
 }));
 
@@ -372,10 +500,13 @@ export const userRoles = pgTable("user_roles", {
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
   role: roleEnum("role").notNull(),
   grantedAt: timestamp("granted_at", { withTimezone: true }).defaultNow().notNull(),
-  grantedBy: uuid("granted_by").references(() => users.id),
+  grantedBy: uuid("granted_by").references(() => users.id),           // null when granted by system seed; see rationale
+  expiresAt: timestamp("expires_at", { withTimezone: true }),         // null = permanent; populated = automatic revocation by background job at this time
+  expirationReason: text("expiration_reason"),                        // human note ("vacation coverage for Jelai", "project Q3 access")
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.businessId, t.role] }),
   byBusinessRole: index("user_roles_business_role_idx").on(t.businessId, t.role),
+  byExpiresAt: index("user_roles_expires_at_idx").on(t.expiresAt).where(sql`${t.expiresAt} IS NOT NULL`),  // for the expiration sweep job
 }));
 
 // =============================================================================
@@ -1008,6 +1139,9 @@ export const auditLog = pgTable("audit_log", {
 export const insertAccountSchema = createInsertSchema(accounts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertBusinessSchema = createInsertSchema(businesses).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertUserCredentialSchema = createInsertSchema(userCredentials).omit({ createdAt: true, updatedAt: true });
+export const insertUserSecuritySchema = createInsertSchema(userSecurity).omit({ updatedAt: true });
+export const insertUserMfaFactorSchema = createInsertSchema(userMfaFactors).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertUserBusinessSchema = createInsertSchema(userBusinesses).omit({ joinedAt: true });
 export const insertUserRoleSchema = createInsertSchema(userRoles).omit({ grantedAt: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true, updatedAt: true });
@@ -1039,6 +1173,12 @@ export type Business = typeof businesses.$inferSelect;
 export type InsertBusiness = z.infer<typeof insertBusinessSchema>;
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
+export type UserCredential = typeof userCredentials.$inferSelect;
+export type InsertUserCredential = z.infer<typeof insertUserCredentialSchema>;
+export type UserSecurity = typeof userSecurity.$inferSelect;
+export type InsertUserSecurity = z.infer<typeof insertUserSecuritySchema>;
+export type UserMfaFactor = typeof userMfaFactors.$inferSelect;
+export type InsertUserMfaFactor = z.infer<typeof insertUserMfaFactorSchema>;
 export type UserBusiness = typeof userBusinesses.$inferSelect;
 export type UserRole = typeof userRoles.$inferSelect;
 export type Customer = typeof customers.$inferSelect;

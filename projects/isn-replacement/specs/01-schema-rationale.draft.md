@@ -46,6 +46,89 @@ Tables that explicitly do NOT soft-delete:
 - `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
 - `audit_log`: append-only by design. Hard delete only via configured retention job.
 
+## Membership and permission triple, review pass 2026-04-27
+
+### Credentials split out of users
+
+`passwordHash` lived on `users` in v3 initial draft. Per review, it moves to a dedicated `user_credentials` table for these reasons:
+
+- Most reads of `users` do not need credential material. Pulling secrets into memory on every fetch is sloppy.
+- Future SSO (Google, Microsoft) and passkey support need their own row shape; one credential per kind per user.
+- Credential rotation history is its own concern; a `user_credentials_history` table can land later without touching `users`.
+- Read-audit on credentials is mandatory under S5; isolating them simplifies the audit boundary.
+
+`user_credentials` PK is `(user_id, kind)`. Kinds today: `password`. Future: `sso_google`, `sso_microsoft`, `passkey`.
+
+### Login security state in user_security
+
+A dedicated 1:1 table for login-related state: failed-login counters, last-login metadata (timestamp, IP, user agent), lockout, and password-reset enforcement. Reasons:
+
+- High-write columns (every login attempt updates) live separately so they do not bloat the `users` write path.
+- Cleaner audit boundary; this entire table is sensitive read.
+- Future expansion (geo-anomaly detection, device tracking) lands here without affecting `users`.
+
+IP addresses are PII per GDPR. Marked accordingly. The 10x scale row count equals user count (1:1).
+
+### MFA factors as a separate table
+
+Multi-factor designed in, not bolted on. `user_mfa_factors` lets a user have multiple factors (TOTP + backup codes + WebAuthn). Each factor row is independent.
+
+MFA secrets (TOTP shared secret, encrypted backup codes) are encrypted at the application layer using a key from the secrets store, NOT stored as plaintext or relying on at-rest DB encryption alone. Implementation detail handled in the auth slice.
+
+MFA enforcement policy (required vs optional, per role, per business) is configuration on `accounts.config` and `businesses.config`, not on this table.
+
+### Email verification on users
+
+`users.emailVerifiedAt` (nullable timestamp) replaces "trust whatever email was entered." Null means unverified. The application gates sensitive notifications and password resets through this flag.
+
+Verification flow:
+
+1. User created (or email changed) -> emailVerifiedAt = null.
+2. System sends verification link with a single-use token.
+3. User clicks link -> emailVerifiedAt = now().
+
+Referenced in security spec S2 as a PII-related verification gate.
+
+### Role expiration
+
+`user_roles.expiresAt` (nullable). Null = permanent. Populated = automatic revocation at expiry by a background sweep job that DELETEs expired rows and writes audit_log entries.
+
+Real-world cases:
+
+- Vacation coverage: "give Maria temp dispatcher role for 2 weeks while Sara is out."
+- Project access: "give the contractor viewer access until project Q3 ends."
+- License-based access: "grant analytics role until end of trial."
+
+The sweep job runs hourly. Its query is served by `user_roles_expires_at_idx`, a partial index on `expires_at WHERE expires_at IS NOT NULL`.
+
+### is_primary on user_businesses, decision pending
+
+Review item 6: should `isPrimary` stay on `user_businesses` or move to a future `user_preferences` table?
+
+**Hatch recommendation:** move to user_preferences. `isPrimary` is UI default context, not a membership fact. Membership tables describe membership; preferences describe preferences.
+
+**Pending Troy confirm.** If confirmed, separate commit removes the column from `user_businesses` and replaces it with a deterministic UI fallback (lowest joined_at wins) until `user_preferences` lands.
+
+### Standalone user_id index dropped on user_businesses
+
+The PK is `(user_id, business_id)`. The leading column serves user-side lookups directly. The redundant standalone `(user_id)` index has been removed; reduces write overhead on every membership change.
+
+### user_roles.grantedBy nullability and seed strategy
+
+`grantedBy` is nullable to support system-grant scenarios:
+
+- **Seed:** the first owner of an account is granted `owner` role with `grantedBy=null`. The audit_log entry for this seed event records `userId=null` and a structured `changes` payload with `context='system_seed'`.
+- **Automated upgrades:** if a future migration grants a new role en-masse, those rows have `grantedBy=null` and audit_log captures the migration version.
+- **Human grants:** populated with the granting user's id.
+
+When reading user_roles for display ("who granted this role"), null renders as "System."
+
+### Account-wide role design note (review item 7)
+
+No `account_roles` table today. A user who is `owner` of every business in their account has one `user_roles` row per business. For our internal account with three businesses, that's three rows per owner. Acceptable.
+
+When a licensee with many businesses produces operational pain (e.g., "add a new business and remember to grant the owner role there too"), we add an `account_roles` table for true account-wide grants. Row count today does not justify it.
+
 ## Inspections table conventions (review pass 2026-04-27)
 
 ### leadInspectorId is nullable by design
