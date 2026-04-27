@@ -2,6 +2,24 @@
 
 Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
+## Operational lessons learned
+
+### Model switching: always verify after a switch attempt
+
+If a model-switch command (slash or tool parameter) returns an error, IMMEDIATELY pull `/status` to verify what is actually running. **Do not assume a failed switch reverted to a previous model or applied as expected.** Captured 2026-04-27 after a 3-hour run on Opus when Sonnet was expected.
+
+Allowed model names in this OpenClaw deployment as of 2026-04-27:
+- `anthropic/claude-opus-4-7` (default, full-prefix form)
+
+NOT allowed (tried, failed):
+- `claude-sonnet-4-5`
+- `anthropic/claude-sonnet-4-5`
+- `sonnet-4-5`
+- `anthropic/claude-sonnet-4-7`
+
+When Sonnet access is restored or configured, update this list. Check OpenClaw policy or contact the gateway operator.
+
+
 ## What Goes Here
 
 Things like:
