@@ -9,7 +9,8 @@ Skills define _how_ tools work. This file is for _your_ specifics — the stuff 
 If a model-switch command (slash or tool parameter) returns an error, IMMEDIATELY pull `/status` to verify what is actually running. **Do not assume a failed switch reverted to a previous model or applied as expected.** Captured 2026-04-27 after a 3-hour run on Opus when Sonnet was expected.
 
 Allowed model names in this OpenClaw deployment as of 2026-04-27:
-- `anthropic/claude-opus-4-7` (default, full-prefix form)
+- `anthropic/claude-opus-4-7` (default, 1M context window)
+- `anthropic/claude-sonnet-4-6` (fallback, 200k context window)
 
 NOT allowed (tried, failed):
 - `claude-sonnet-4-5`
@@ -17,7 +18,11 @@ NOT allowed (tried, failed):
 - `sonnet-4-5`
 - `anthropic/claude-sonnet-4-7`
 
-When Sonnet access is restored or configured, update this list. Check OpenClaw policy or contact the gateway operator.
+Context window constraint: Sonnet 4-6 has a 200k token window. Long sessions (anything over ~150k tokens) will show 337%+ context on Sonnet. For deep sessions, stay on Opus. Start a fresh session or compact before switching to Sonnet.
+
+Alias shortcuts (per AGENTS.md header):
+- `opus` → `anthropic/claude-opus-4-7`
+- `sonnet` → `anthropic/claude-sonnet-4-6` (verify; the alias may resolve to 4-7 which is not confirmed available)
 
 
 ## What Goes Here
