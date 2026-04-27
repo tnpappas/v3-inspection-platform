@@ -526,6 +526,120 @@ export const userMfaFactors = pgTable("user_mfa_factors", {
 }));
 
 // =============================================================================
+// Permissions and access control (v3.1)
+// =============================================================================
+// Two-tier RBAC: granular `permissions` are checked at request time;
+// `permission_groups` bundle granular permissions for operational ergonomics.
+// `role_permissions` configures default capabilities per role per account.
+// `user_permission_overrides` carries per-user grants and denies, with denies
+// always winning over group grants. Resolution algorithm in 06-security-spec.md S11.
+//
+// Storage option chosen: B-2 (separate tables for permissions and groups; both
+// can be referenced from role_permissions and user_permission_overrides via
+// distinct nullable columns with a CHECK constraint enforcing exactly-one-target).
+// Rationale: explicit beats implicit for security-critical data; cleaner audit
+// trail; flat group structure (no nesting) keeps resolution simple.
+//
+// Sensitivity: a permission is sensitive when access to it requires extra audit.
+// A group is sensitive when ANY contained permission is sensitive (computed and
+// cached on `permission_groups.sensitive`; recomputed on group membership change).
+
+// Table: permissions
+// Security:      System-managed reference table. NOT user-editable; seeded from a TS constant via migration. Sensitive permissions trigger enhanced audit on grant/revoke and on use.
+// Scalability:   No partition key. Tiny table, ~45-60 rows at 10x. PK on key.
+// Multi-business: SHARED across all accounts. Permissions describe what code can check; cannot be account-customized.
+export const permissions = pgTable("permissions", {
+  key: varchar("key", { length: 100 }).primaryKey(),                  // e.g., "view.customer.pii"
+  category: varchar("category", { length: 50 }).notNull(),            // "view" | "edit" | "create" | "sensitive" | "config"
+  description: text("description").notNull(),
+  sensitive: boolean("sensitive").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  byCategory: index("permissions_category_idx").on(t.category),
+  bySensitive: index("permissions_sensitive_idx").on(t.sensitive).where(sql`${t.sensitive} = true`),
+}));
+
+// Table: permission_groups
+// Security:      System-managed reference table. NOT user-editable; seeded from a TS constant via migration. Sensitivity flag is computed from contained permissions; cached on this row for fast lookup; recomputed on membership change. Group denies expand to granular denies at resolution time per S11.
+// Scalability:   No partition key. Tiny table, ~9-12 rows at 10x. PK on key.
+// Multi-business: SHARED across all accounts. Groups define stable bundles; account-level customization happens via role_permissions.
+export const permissionGroups = pgTable("permission_groups", {
+  key: varchar("key", { length: 100 }).primaryKey(),                  // e.g., "admin", "financial"
+  name: varchar("name", { length: 100 }).notNull(),                   // human-readable: "Admin"
+  description: text("description").notNull(),
+  // Cached: TRUE when any contained permission has sensitive=true. Recomputed
+  // by application code in the migration that mutates permission_group_members.
+  sensitive: boolean("sensitive").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  bySensitive: index("permission_groups_sensitive_idx").on(t.sensitive).where(sql`${t.sensitive} = true`),
+}));
+
+// Table: permission_group_members
+// Security:      System-managed junction. NOT user-editable; seeded from a TS constant via migration. Adding a permission to a group is a code+migration change; affects every user with a grant of the group going forward (effective permissions recomputed on session start). Audit log captures the migration event.
+// Scalability:   PK (group_key, permission_key). Tiny, ~80-150 rows at 10x.
+// Multi-business: SHARED.
+export const permissionGroupMembers = pgTable("permission_group_members", {
+  groupKey: varchar("group_key", { length: 100 }).notNull().references(() => permissionGroups.key, { onDelete: "cascade" }),
+  permissionKey: varchar("permission_key", { length: 100 }).notNull().references(() => permissions.key, { onDelete: "cascade" }),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.groupKey, t.permissionKey] }),
+  byPermission: index("permission_group_members_permission_idx").on(t.permissionKey),
+}));
+
+// Table: role_permissions
+// Security:      Per-account configuration of role defaults. RLS: account-scoped via account_id. Sensitive entries (granting a sensitive permission or sensitive group to a role) trigger enhanced audit. Soft-delete: NO; revocation is a literal DELETE plus audit_log entry.
+// Scalability:   PK on (account_id, role, permission_key, group_key). Composite index on (account_id, role) for the resolution query. Expected row count at 10x: ~3,000 per account (7 roles × ~50 average permission/group entries; mix of group rows and individual rows).
+// Multi-business: ACCOUNT-SCOPED. New accounts seed with the default role mapping; owner can adjust later via manage.account_config.
+//
+// Constraint: exactly one of (permission_key, group_key) is non-null per row.
+// This separates granular permission grants from group grants cleanly; audit
+// payload distinguishes the two.
+export const rolePermissions = pgTable("role_permissions", {
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  role: roleEnum("role").notNull(),
+  permissionKey: varchar("permission_key", { length: 100 }).references(() => permissions.key),
+  groupKey: varchar("group_key", { length: 100 }).references(() => permissionGroups.key),
+  configuredAt: timestamp("configured_at", { withTimezone: true }).defaultNow().notNull(),
+  configuredBy: uuid("configured_by").references(() => users.id),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.accountId, t.role, t.permissionKey, t.groupKey] }),
+  byAccountRole: index("role_permissions_account_role_idx").on(t.accountId, t.role),
+  exactlyOneTarget: check(
+    "role_permissions_exactly_one_target",
+    sql`(permission_key IS NULL) <> (group_key IS NULL)`
+  ),
+}));
+
+// Table: user_permission_overrides
+// Security:      Per-user grants and denies. RLS: account-scoped through user FK chain. Granular denies override group grants per S11. Read-audit applies (S5). Soft-delete: NO; revocation is a literal DELETE plus audit_log entry.
+// Scalability:   PK on (user_id, business_id, permission_key, group_key, effect). Indexes on (user_id, business_id), (expires_at WHERE NOT NULL). Expected row count at 10x: ~3,000-5,000 per account (~10% of users have at least one override; some have several).
+// Multi-business: SCOPED per (user, business). Same pattern as user_roles. Same expiration model: NULL means permanent; populated means automatic revocation by hourly sweep.
+//
+// Constraint: exactly one of (permission_key, group_key) is non-null per row.
+// PK includes effect so a user can have both a grant and a deny on the same
+// target during transitional configurations (rare).
+export const userPermissionOverrides = pgTable("user_permission_overrides", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
+  permissionKey: varchar("permission_key", { length: 100 }).references(() => permissions.key),
+  groupKey: varchar("group_key", { length: 100 }).references(() => permissionGroups.key),
+  effect: permissionEffectEnum("effect").notNull(),                   // "grant" | "deny"
+  reason: text("reason"),                                             // why this override exists; required by application UI for sensitive overrides
+  grantedBy: uuid("granted_by").references(() => users.id),
+  grantedAt: timestamp("granted_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),         // null = permanent; populated = revoke automatically
+}, (t) => ({
+  pk: primaryKey({ columns: [t.userId, t.businessId, t.permissionKey, t.groupKey, t.effect] }),
+  byUserBusiness: index("user_permission_overrides_user_business_idx").on(t.userId, t.businessId),
+  byExpires: index("user_permission_overrides_expires_idx").on(t.expiresAt).where(sql`${t.expiresAt} IS NOT NULL`),
+  exactlyOneTarget: check(
+    "user_permission_overrides_exactly_one_target",
+    sql`(permission_key IS NULL) <> (group_key IS NULL)`
+  ),
+}));
+
+// =============================================================================
 // user_businesses (membership within account)
 // =============================================================================
 // Table: user_businesses
@@ -1239,6 +1353,7 @@ export const auditLog = pgTable("audit_log", {
     "audit_log_entity_type_check",
     sql`entity_type IN (
       'account','business','user','user_credential','user_security','user_mfa_factor','user_business','user_role',
+      'permission','permission_group','permission_group_member','role_permission','user_permission_override',
       'customer','property','customer_business','property_business','customer_property','transaction_participant','agency','agency_business',
       'service','technician_hours','technician_time_off','technician_zip','technician_service_duration',
       'inspection','inspection_inspector','inspection_participant','inspection_service','reschedule_history',
@@ -1281,6 +1396,11 @@ export const insertUserSecuritySchema = createInsertSchema(userSecurity).omit({ 
 export const insertUserMfaFactorSchema = createInsertSchema(userMfaFactors).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertUserBusinessSchema = createInsertSchema(userBusinesses).omit({ joinedAt: true });
 export const insertUserRoleSchema = createInsertSchema(userRoles).omit({ grantedAt: true });
+export const insertPermissionSchema = createInsertSchema(permissions).omit({ createdAt: true });
+export const insertPermissionGroupSchema = createInsertSchema(permissionGroups).omit({ createdAt: true });
+export const insertPermissionGroupMemberSchema = createInsertSchema(permissionGroupMembers);
+export const insertRolePermissionSchema = createInsertSchema(rolePermissions).omit({ configuredAt: true });
+export const insertUserPermissionOverrideSchema = createInsertSchema(userPermissionOverrides).omit({ grantedAt: true });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCustomerBusinessSchema = createInsertSchema(customerBusinesses).omit({ firstSeenAt: true, lastActivityAt: true });
 export const insertPropertySchema = createInsertSchema(properties).omit({ id: true, createdAt: true, updatedAt: true });
@@ -1318,6 +1438,15 @@ export type UserMfaFactor = typeof userMfaFactors.$inferSelect;
 export type InsertUserMfaFactor = z.infer<typeof insertUserMfaFactorSchema>;
 export type UserBusiness = typeof userBusinesses.$inferSelect;
 export type UserRole = typeof userRoles.$inferSelect;
+export type Permission = typeof permissions.$inferSelect;
+export type InsertPermission = z.infer<typeof insertPermissionSchema>;
+export type PermissionGroup = typeof permissionGroups.$inferSelect;
+export type InsertPermissionGroup = z.infer<typeof insertPermissionGroupSchema>;
+export type PermissionGroupMember = typeof permissionGroupMembers.$inferSelect;
+export type RolePermissionRow = typeof rolePermissions.$inferSelect;
+export type InsertRolePermissionRow = z.infer<typeof insertRolePermissionSchema>;
+export type UserPermissionOverride = typeof userPermissionOverrides.$inferSelect;
+export type InsertUserPermissionOverride = z.infer<typeof insertUserPermissionOverrideSchema>;
 export type Customer = typeof customers.$inferSelect;
 export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type CustomerBusiness = typeof customerBusinesses.$inferSelect;
