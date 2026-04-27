@@ -148,7 +148,7 @@ export const businesses = pgTable("businesses", {
   logoUrl: varchar("logo_url", { length: 500 }),
   primaryColor: varchar("primary_color", { length: 16 }),            // hex like "#0F172A"
 
-  // Contact
+  // Contact (corporate, not personal PII)
   address1: text("address1"),
   address2: text("address2"),
   city: varchar("city", { length: 100 }),
@@ -184,31 +184,31 @@ export const businesses = pgTable("businesses", {
 // the fly from `user_roles` filtered to the current business.
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: varchar("email", { length: 255 }).notNull().unique(),
-  username: varchar("username", { length: 100 }).unique(),           // ISN: username (kept for migration mapping)
-  passwordHash: varchar("password_hash", { length: 255 }),
+  email: varchar("email", { length: 255 }).notNull().unique(),       // PII: contact_email | ISN: emailaddress
+  username: varchar("username", { length: 100 }).unique(),           // PII: name (sometimes user identity) | ISN: username
+  passwordHash: varchar("password_hash", { length: 255 }),           // PII: credentials
 
   // Identity
-  firstName: varchar("first_name", { length: 100 }),                 // ISN: firstname
-  lastName: varchar("last_name", { length: 100 }),                   // ISN: lastname
-  displayName: varchar("display_name", { length: 200 }).notNull(),   // ISN: displayname (fallback "{first} {last}" on import)
+  firstName: varchar("first_name", { length: 100 }),                 // PII: name | ISN: firstname
+  lastName: varchar("last_name", { length: 100 }),                   // PII: name | ISN: lastname
+  displayName: varchar("display_name", { length: 200 }).notNull(),   // PII: name | ISN: displayname
 
   // Contact
-  phone: varchar("phone", { length: 50 }),                           // ISN: phone
-  mobile: varchar("mobile", { length: 50 }),                         // ISN: mobile
-  fax: varchar("fax", { length: 50 }),                               // ISN: fax
-  address1: text("address1"),                                        // ISN: address1
-  address2: text("address2"),                                        // ISN: address2
-  city: varchar("city", { length: 100 }),                            // ISN: city
-  state: varchar("state", { length: 2 }),                            // ISN: stateabbreviation
-  zip: varchar("zip", { length: 20 }),                               // ISN: zip
-  county: varchar("county", { length: 100 }),                        // ISN: county
+  phone: varchar("phone", { length: 50 }),                           // PII: phone | ISN: phone
+  mobile: varchar("mobile", { length: 50 }),                         // PII: phone | ISN: mobile
+  fax: varchar("fax", { length: 50 }),                               // PII: phone | ISN: fax
+  address1: text("address1"),                                        // PII: address | ISN: address1
+  address2: text("address2"),                                        // PII: address | ISN: address2
+  city: varchar("city", { length: 100 }),                            // PII: address | ISN: city
+  state: varchar("state", { length: 2 }),                            // PII: address | ISN: stateabbreviation
+  zip: varchar("zip", { length: 20 }),                               // PII: address | ISN: zip
+  county: varchar("county", { length: 100 }),                        // PII: address | ISN: county
 
   // Profession
-  license: varchar("license", { length: 100 }),                      // ISN: license
+  license: varchar("license", { length: 100 }),                      // PII: government_id | ISN: license
   licenseType: varchar("license_type", { length: 100 }),             // ISN: licensetype
   bio: text("bio"),                                                  // ISN: bio
-  photoUrl: varchar("photo_url", { length: 500 }),                   // ISN: photourl (rehosted on our asset host on migration)
+  photoUrl: varchar("photo_url", { length: 500 }),                   // PII: name (photo) | ISN: photourl
 
   // Comms preferences
   smsOptIn: boolean("sms_opt_in").default(false).notNull(),          // ISN: sendSMS coerced
@@ -283,24 +283,24 @@ export const userRoles = pgTable("user_roles", {
 // ISN's `clients` map mostly here. Edge cases handled in migration plan.
 export const customers = pgTable("customers", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  firstName: varchar("first_name", { length: 100 }),
-  lastName: varchar("last_name", { length: 100 }),
-  displayName: varchar("display_name", { length: 200 }).notNull(),
+  firstName: varchar("first_name", { length: 100 }),                 // PII: name
+  lastName: varchar("last_name", { length: 100 }),                   // PII: name
+  displayName: varchar("display_name", { length: 200 }).notNull(),   // PII: name
 
-  email: varchar("email", { length: 255 }),                          // not unique, same person could appear with secondary email
-  phoneMobile: varchar("phone_mobile", { length: 50 }),
-  phoneHome: varchar("phone_home", { length: 50 }),
-  phoneWork: varchar("phone_work", { length: 50 }),
+  email: varchar("email", { length: 255 }),                          // PII: contact_email | not unique, same person can appear with secondary email
+  phoneMobile: varchar("phone_mobile", { length: 50 }),              // PII: phone
+  phoneHome: varchar("phone_home", { length: 50 }),                  // PII: phone
+  phoneWork: varchar("phone_work", { length: 50 }),                  // PII: phone
 
   // Mailing address (separate from properties; a customer's address is not
   // necessarily the property being inspected).
-  address1: text("address1"),
-  address2: text("address2"),
-  city: varchar("city", { length: 100 }),
-  state: varchar("state", { length: 2 }),
-  zip: varchar("zip", { length: 20 }),
+  address1: text("address1"),                                        // PII: address
+  address2: text("address2"),                                        // PII: address
+  city: varchar("city", { length: 100 }),                            // PII: address
+  state: varchar("state", { length: 2 }),                            // PII: address
+  zip: varchar("zip", { length: 20 }),                               // PII: address
 
-  notes: text("notes"),
+  notes: text("notes"),                                              // PII: notes (free text may contain anything)
 
   smsOptIn: boolean("sms_opt_in").default(false).notNull(),
   emailOptIn: boolean("email_opt_in").default(true).notNull(),
@@ -354,16 +354,16 @@ export const properties = pgTable("properties", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
 
   // Address (the physical address, normalized)
-  address1: text("address1").notNull(),
-  address2: text("address2"),
-  city: varchar("city", { length: 100 }).notNull(),
-  state: varchar("state", { length: 2 }).notNull(),
-  zip: varchar("zip", { length: 20 }).notNull(),
-  county: varchar("county", { length: 100 }),
+  address1: text("address1").notNull(),                              // PII: address
+  address2: text("address2"),                                        // PII: address
+  city: varchar("city", { length: 100 }).notNull(),                  // PII: address
+  state: varchar("state", { length: 2 }).notNull(),                  // PII: address
+  zip: varchar("zip", { length: 20 }).notNull(),                     // PII: address
+  county: varchar("county", { length: 100 }),                        // PII: address
 
   // Geocoding (populated async by integration; nullable until then)
-  latitude: decimal("latitude", { precision: 9, scale: 6 }),
-  longitude: decimal("longitude", { precision: 9, scale: 6 }),
+  latitude: decimal("latitude", { precision: 9, scale: 6 }),         // PII: location_precise
+  longitude: decimal("longitude", { precision: 9, scale: 6 }),       // PII: location_precise
 
   // Property metadata. Extend as Phase 2 reveals more ISN fields.
   yearBuilt: integer("year_built"),                                  // GAP confirm Phase 2
@@ -441,13 +441,13 @@ export const transactionParticipants = pgTable("transaction_participants", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   agencyId: uuid("agency_id").references(() => agencies.id),         // optional; realtors usually have an agency, others may not
 
-  firstName: varchar("first_name", { length: 100 }),
-  lastName: varchar("last_name", { length: 100 }),
-  displayName: varchar("display_name", { length: 200 }).notNull(),
+  firstName: varchar("first_name", { length: 100 }),                 // PII: name
+  lastName: varchar("last_name", { length: 100 }),                   // PII: name
+  displayName: varchar("display_name", { length: 200 }).notNull(),   // PII: name
 
-  email: varchar("email", { length: 255 }),
-  phone: varchar("phone", { length: 50 }),
-  mobile: varchar("mobile", { length: 50 }),
+  email: varchar("email", { length: 255 }),                          // PII: contact_email
+  phone: varchar("phone", { length: 50 }),                           // PII: phone
+  mobile: varchar("mobile", { length: 50 }),                         // PII: phone
 
   // Their primary role taxonomy. Same person can serve multiple roles across
   // transactions; this column captures their dominant historical role.
@@ -653,8 +653,8 @@ export const inspections = pgTable("inspections", {
   feeAmount: decimal("fee_amount", { precision: 10, scale: 2 }).notNull(),
 
   // Notes
-  specialInstructions: text("special_instructions"),                  // visible to inspector and (some channels) client
-  internalNotes: text("internal_notes"),                              // staff only
+  specialInstructions: text("special_instructions"),                  // PII: notes (free text) | visible to inspector and (some channels) client
+  internalNotes: text("internal_notes"),                              // PII: notes (free text) | staff only
 
   // Lifecycle
   rescheduleCount: integer("reschedule_count").default(0).notNull(),
