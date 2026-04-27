@@ -138,6 +138,7 @@ export const inspectionStatusEnum = pgEnum("inspection_status", [
   "completed",
   "cancelled",
   "no_show",
+  "on_hold",               // bumped from previous date, new date not yet locked. Distinct from scheduled (has confirmed date) and rescheduled (had a new date instantly assigned)
 ]);
 export const paymentStatusEnum = pgEnum("payment_status", ["unpaid", "partial", "paid", "refunded"]);
 export const signatureStatusEnum = pgEnum("signature_status", ["unsigned", "signed", "expired"]);
@@ -166,6 +167,7 @@ export const auditActionEnum = pgEnum("audit_action", [
   "login",
   "logout",
   "read_sensitive",
+  "export",                // bulk export of records (CSV, PDF, report download); distinct from view/read_sensitive
 ]);
 
 // =============================================================================
@@ -196,15 +198,18 @@ export const accounts = pgTable("accounts", {
   // Catch-all configuration. Validated by accountConfigSchema in shared/schemas/.
   config: jsonb("config").default(sql`'{}'::jsonb`).notNull(),
 
-  // Audit columns. Nullable on accounts only (chicken-and-egg for the seed:
-  // there is no user yet when the first account is inserted). Future accounts
-  // created via licensing flow can populate these from the licensing actor.
-  createdBy: uuid("created_by"),                                     // intentionally NOT a FK, see rationale doc
-  lastModifiedBy: uuid("last_modified_by"),                          // ditto
+  // Audit columns. Nullable FK to users.id (chicken-and-egg for the seed account:
+  // no user exists yet when the first account row is inserted). Future accounts
+  // created via the licensing flow populate these from the licensing actor.
+  // FK constraint applies when populated; NULL is the only allowed unconstrained
+  // value. Reviewed and confirmed: this is the only chicken-and-egg case in the
+  // schema; every other table that has createdBy/lastModifiedBy uses non-null FKs.
+  createdBy: uuid("created_by").references(() => users.id),
+  lastModifiedBy: uuid("last_modified_by").references(() => users.id),
 
   // Soft-delete (security spec S4)
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
-  deletedBy: uuid("deleted_by"),
+  deletedBy: uuid("deleted_by").references(() => users.id),
   deleteReason: text("delete_reason"),
 
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -244,7 +249,10 @@ export const businesses = pgTable("businesses", {
   email: varchar("email", { length: 255 }),
   website: varchar("website", { length: 255 }),
 
-  // UI display order, default 0 and set by application logic on insert per Troy's directive
+  // UI display order. Application logic computes MAX(display_order)+1 within
+  // the account on insert; reorder operations bump subsequent rows in a
+  // transaction. Uniqueness on (account_id, display_order) enforces deterministic
+  // ordering at the DB layer (see indexes below).
   displayOrder: integer("display_order").notNull().default(0),
 
   // Catch-all config; validated by businessConfigSchema in shared/schemas/.
@@ -265,6 +273,7 @@ export const businesses = pgTable("businesses", {
   byAccount: index("businesses_account_idx").on(t.accountId),
   byAccountStatus: index("businesses_account_status_idx").on(t.accountId, t.status),
   byAccountSlug: uniqueIndex("businesses_account_slug_unique").on(t.accountId, t.slug),
+  byAccountDisplayOrder: uniqueIndex("businesses_account_display_order_unique").on(t.accountId, t.displayOrder),
   byDeletedAt: index("businesses_deleted_at_idx").on(t.deletedAt),
 }));
 
@@ -653,13 +662,18 @@ export const services = pgTable("services", {
 // =============================================================================
 // Technician availability (business-scoped; account inherited)
 // =============================================================================
-// Tables: inspector_hours, inspector_time_off, inspector_zips, inspector_service_durations
-// Security:      No PII. RLS: account-and-business-scoped via business FK chain.
-// Scalability:   inspector_hours: ~25,000 rows at 10x. inspector_time_off: ~2,500 active. inspector_zips: ~50,000. inspector_service_durations: ~10,000.
-// Multi-business: SCOPED. Per spec 08 M3: availability keyed per-business, so a user serving multiple businesses has separate hours per business.
+// All four tables in this section follow the same scope and RLS pattern. Per
+// spec 08 M3, availability is keyed per-business, so a user serving multiple
+// businesses has separate hours/time-off/territory/duration overrides per
+// business.
 //
-// Naming open question (spec 08 #2): rename to technician_* to match per-business term. Deferred until Troy reviews.
+// Naming open question (spec 08 #2): rename to technician_* to match per-business
+// term. Deferred until Troy reviews.
 
+// Table: inspector_hours
+// Security:      No PII. RLS: account-and-business-scoped via business FK chain. Soft-delete: NO; rows are deleted/reissued when hours change.
+// Scalability:   Indexes on (user_id, business_id). Expected row count at 10x: ~25,000 across all accounts (50 inspectors per account avg × 7 days × 1-2 windows).
+// Multi-business: SCOPED. New business onboarding adds rows scoped to that business.
 export const inspectorHours = pgTable("inspector_hours", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -676,6 +690,10 @@ export const inspectorHours = pgTable("inspector_hours", {
   byUserBiz: index("inspector_hours_user_biz_idx").on(t.userId, t.businessId),
 }));
 
+// Table: inspector_time_off
+// Security:      No PII directly (reason text could in rare cases include sensitive context, e.g., medical leave). Soft-delete: NO; rows are removed when time-off ends or is cancelled.
+// Scalability:   Indexes on (user_id, business_id), (starts_at, ends_at). Expected row count at 10x: ~2,500 active windows across all accounts.
+// Multi-business: SCOPED. New business onboarding adds rows scoped to that business.
 export const inspectorTimeOff = pgTable("inspector_time_off", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -691,6 +709,10 @@ export const inspectorTimeOff = pgTable("inspector_time_off", {
   byWindow: index("inspector_time_off_window_idx").on(t.startsAt, t.endsAt),
 }));
 
+// Table: inspector_zips
+// Security:      No PII. RLS: account-and-business-scoped via business FK chain. Soft-delete: NO; territory rows are added/removed directly.
+// Scalability:   PK (user_id, business_id, zip). Index on (zip, business_id) for slot computation lookups. Expected row count at 10x: ~50,000 (50 inspectors × 200 ZIPs avg × multi-account).
+// Multi-business: SCOPED. New business onboarding adds rows scoped to that business.
 export const inspectorZips = pgTable("inspector_zips", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -704,6 +726,10 @@ export const inspectorZips = pgTable("inspector_zips", {
   byZipBiz: index("inspector_zips_zip_biz_idx").on(t.zip, t.businessId),
 }));
 
+// Table: inspector_service_durations
+// Security:      No PII. RLS: account-and-business-scoped via service FK chain (services carries business_id; account inherits).
+// Scalability:   PK (user_id, service_id). Expected row count at 10x: ~10,000 (50 inspectors × ~5 services with overrides × multi-account).
+// Multi-business: SCOPED via parent service.
 export const inspectorServiceDurations = pgTable("inspector_service_durations", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   serviceId: uuid("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),

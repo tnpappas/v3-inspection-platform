@@ -46,6 +46,15 @@ Tables that explicitly do NOT soft-delete:
 - `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
 - `audit_log`: append-only by design. Hard delete only via configured retention job.
 
+## Future migration considerations
+
+Notes captured during review for action when context demands. Not blocking the current schema lock.
+
+- **`accounts.billingCountry` defaults to `"US"`.** When licensing expands beyond US tenants, the default needs review (probably remove default and require explicit value at insert). For Safe House and likely first-wave licensees, US is correct.
+- **`displayOrder` reorder strategy is lazy.** Application computes `MAX(display_order)+1` per account on insert; reorder operations bump subsequent rows in a transaction. If reorders become frequent or contended, consider sparse-gap allocation (`+1000` increments) to reduce write contention. Not necessary at our scale.
+- **`on_hold` inspection status convention.** When an inspection is bumped without a new date locked: `status='on_hold'` and `scheduledAt` may stay populated showing the old date for reference, OR be set to a placeholder (e.g., end-of-day far-future). Final convention picked in `04-field-mapping.md` when that doc is drafted.
+- **`inspector_hours` and similar availability tables have NO soft-delete.** Hours change frequently and we do not need to retain historical hour windows. If audit becomes a concern (e.g., "what hours did inspector X have on 2026-04-15?"), we add a separate `inspector_hours_history` table rather than soft-delete columns on the main one.
+
 ## Pending v2 schema deltas (from Phase 2 pilot, 2026-04-26)
 
 To be applied in the next schema draft pass (after Troy's inline review).
