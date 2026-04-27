@@ -126,6 +126,8 @@ export const roleInTransactionEnum = pgEnum("role_in_transaction", [
   "transaction_coordinator",
   "escrow_officer",
   "insurance_agent",
+  "lender",                  // common in VA Beach real estate; relevant when billing to closing
+  "attorney",                // closing attorney; can be the financial decision-maker for bill-to-closing workflow
   "seller",
   "other",
 ]);
@@ -140,7 +142,13 @@ export const inspectionStatusEnum = pgEnum("inspection_status", [
   "no_show",
   "on_hold",               // bumped from previous date, new date not yet locked. Distinct from scheduled (has confirmed date) and rescheduled (had a new date instantly assigned)
 ]);
-export const paymentStatusEnum = pgEnum("payment_status", ["unpaid", "partial", "paid", "refunded"]);
+export const paymentStatusEnum = pgEnum("payment_status", [
+  "unpaid",
+  "partial",
+  "paid",
+  "refunded",
+  "disputed",            // chargeback or customer-initiated dispute is in flight; payment effectively frozen until resolved
+]);
 export const signatureStatusEnum = pgEnum("signature_status", ["unsigned", "signed", "expired"]);
 export const qaStatusEnum = pgEnum("qa_status", ["not_reviewed", "in_review", "approved", "rejected"]);
 

@@ -46,6 +46,32 @@ Tables that explicitly do NOT soft-delete:
 - `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
 - `audit_log`: append-only by design. Hard delete only via configured retention job.
 
+## Bill-to-closing workflow (known Safe House pattern)
+
+Captured 2026-04-27 from review pass. Not implemented in the scheduling slice; surfaced now so the migration plan and the future payments slice account for it.
+
+**Pattern:** for some real estate transactions, the closing attorney or lender is the financial decision-maker for the inspection invoice. The customer is the buyer (and remains the customer-of-record), but the invoice routes to the closing attorney's office and payment occurs at closing rather than at inspection time.
+
+**Operational consequences:**
+
+- **Invoice routing:** the invoice may be addressed to the closing attorney's office or the lender, not the customer's mailing address.
+- **Payment notifications:** the closing entity needs payment status updates, not just the customer.
+- **Payment status timing:** the inspection sits in `paymentStatus='unpaid'` for weeks until closing, then transitions directly to `paid` (or `disputed` if closing falls through).
+- **Reschedule and cancel implications:** cancelling an inspection where billing routes to closing has different downstream effects than a normal cancel.
+
+**Schema readiness:**
+
+- `transaction_participants` table can hold the lender and attorney (now first-class enum values: `lender`, `attorney`).
+- `inspection_participants` junction can flag a participant as the bill-to-closing party.
+- Per-inspection invoice-routing override is NOT yet modeled. The payments slice should add either a column on `inspections` (e.g., `invoice_recipient_participant_id` referencing the inspection_participants row) or a separate `inspection_invoice_routing` table.
+- `paymentStatus = 'disputed'` (newly added) covers the failed-closing case.
+
+**Action items for downstream work:**
+
+- Migration plan (`05-migration-plan.draft.md`): identify ISN orders that used bill-to-closing historically. Trace via order notes or invoice-routing fields. Migrate the participants correctly.
+- Booking flow design: capture bill-to-closing as a flag at intake.
+- Payments slice: design invoice-routing model and payment-trigger semantics.
+
 ## Future migration considerations
 
 Notes captured during review for action when context demands. Not blocking the current schema lock.
