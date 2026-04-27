@@ -46,6 +46,80 @@ Tables that explicitly do NOT soft-delete:
 - `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
 - `audit_log`: append-only by design. Hard delete only via configured retention job.
 
+## Self-review pass 2026-04-27 (customers, properties, agencies, transaction_participants, services, technician_*)
+
+### A. Agencies are temporarily polymorphic
+
+`agencies` today holds three corporate entity flavors: real estate brokerages (the dominant case), lender institutions (banks where lenders work), and law firms (where attorneys work). Application distinguishes by joining to `transaction_participants.primaryRole`.
+
+This overload is acceptable today because:
+
+- All three are corporate entities with name, address, phone, email.
+- We do not need lender-specific fields (NMLS ID) or law-firm-specific fields (bar number, jurisdiction) until bill-to-closing becomes a real workflow.
+- The agencies table is small (~5,000 rows at 10x); a future migration to a richer model is cheap.
+
+**Future expansion: an `organizations` table.** When bill-to-closing graduates from "capture in notes and rationale" to "feature with its own UI," we add an `organizations` table parallel to agencies, scoped to account, with a type discriminator. `transaction_participants` gains an optional `organizationId` FK. Agencies can either migrate forward or stay as a real-estate-brokerage-only table. Worked example will land in `08-multi-business-extensibility-spec.md`.
+
+### B. Customer dedupe rule
+
+Hard dedupe: `(account_id, lower(email), lower(display_name))`. Two records with same account + same email + same name are treated as the same customer. Soft suggestion in UI when phone matches but email or name does not. Manual merge for everything else.
+
+Indexes on customers serve both rules: `customers_account_email_idx` and `customers_account_name_idx`. Phone-based matching uses `lower(phone)` ILIKE; not indexed today (phone search is an admin-tool query, not a hot path). Add an index if usage proves it.
+
+Final rule and migration heuristics captured in `04-field-mapping.md` when that doc ships.
+
+### C. Property dedupe rule
+
+Strict match on lowercased, whitespace-normalized `(address1, city, state, zip)` within an account. No third-party validation today.
+
+Known limitations:
+
+- "123 Main St, Unit 4B" vs "123 Main St #4B" become two different rows. Manual merge UI handles them.
+- USPS-standardized addresses would solve this, but require a third-party API (USPS, Smarty, Lob). Cost is small; integration friction is real.
+
+Upgrade trigger: when staff report routine merge fatigue, or when migration from ISN surfaces a high collision rate, integrate USPS validation as a normalization step on insert. Document trade.
+
+Index `properties_account_addr_lower_idx` serves the dedupe lookup.
+
+### D. inspector_* renamed to technician_*
+
+Four tables and their associated TS variables, indexes, Zod schemas, types, and audit_log entity_type values renamed:
+
+- `inspector_hours` -> `technician_hours`
+- `inspector_time_off` -> `technician_time_off`
+- `inspector_zips` -> `technician_zips`
+- `inspector_service_durations` -> `technician_service_durations`
+
+Reason: the role is generic across business types. Inspector at Safe House, pool tech at HCJ, pest tech at Pest Heroes are all `technician` role with `roleEnum`. Naming the availability tables after one specific business type (Safe House inspections) creates cognitive overhead when the patterns extend.
+
+**Untouched intentionally:**
+
+- `inspection_inspectors.inspectorId` column. This refers to the human filling the inspector role on a Safe House inspection. The column name reflects the operational role, not the table convention.
+- `inspectorOnInspectionRoleEnum`. Same reason.
+- `inspections.byInspector` index name. Points to `lead_inspector_id`, an operational role-specific column.
+
+When pool jobs and pest treatments tables land, they will have analogous `pool_job_technicians` and `pest_treatment_technicians` junction tables, NOT `pool_job_inspectors`. The rename matters.
+
+### E. services.category added
+
+Optional `varchar(100)` column. Examples by business type:
+
+- Inspection (Safe House): `Inspection`, `Sampling`, `Reinspection`, `Specialty`
+- Pool (HCJ): `Chemical Service`, `Equipment Service`, `Leak Detection`, `Opening / Closing`
+- Pest (Pest Heroes): `Termite`, `General Pest`, `Mosquito`, `Wildlife`
+
+Drives UI grouping in service-selection dropdowns and per-category reports. Categorization vocabulary is per-business and lives in `businesses.config` (or as data conventions documented per business). No CHECK constraint or enum because the vocabulary varies by business type.
+
+Partial index `services_business_category_idx` on `(business_id, category)` excludes nulls.
+
+### F. transaction_participants.primaryRole as UI hint
+
+`primaryRole` describes the participant's typical role across transactions. The actual role on a given deal lives on `inspection_participants.role_in_transaction` (and on future `pool_job_participants.role_in_transaction`, `pest_treatment_participants.role_in_transaction`).
+
+Operational use: filtered lists like "show me realtors" or "show me lenders we work with" can read `transaction_participants.primaryRole` directly without joining inspections. The trade is that a participant who plays multiple roles across different deals has only one `primaryRole`; their actual deal participation is always accurate via the junction.
+
+For real estate the convention: `primaryRole` is the role the participant plays most often in our records. UI defaults can override.
+
 ## audit_log review pass 2026-04-27
 
 ### Forensic correlation columns
@@ -252,6 +326,13 @@ Denormalized counter columns drift over time as edge-case writes miss the increm
 
 - `confirmedBy` is the user who recorded the confirmation. Null when the client self-confirmed via the portal (in which case the audit trail in `audit_log` carries the participant info).
 - `initialCompletedBy` is the user who marked the first completion, typically the lead inspector. Distinct from `createdBy` of any later QA-reopen-and-recomplete cycle.
+
+## Customer/Property dedupe summary table
+
+| Entity | Hard rule | Soft rule | Manual |
+|---|---|---|---|
+| customers | (account_id, lower(email), lower(display_name)) | lower(phone) match | merge UI for everything else |
+| properties | (account_id, lower(address1) + city + state + zip, normalized whitespace) | none today | merge UI; future USPS validation |
 
 ## Bill-to-closing workflow (known Safe House pattern)
 

@@ -216,10 +216,10 @@ export const AUDIT_ENTITY_TYPES = [
   "agency_business",
   // operational reference
   "service",
-  "inspector_hours",
-  "inspector_time_off",
-  "inspector_zip",
-  "inspector_service_duration",
+  "technician_hours",
+  "technician_time_off",
+  "technician_zip",
+  "technician_service_duration",
   // operational rows
   "inspection",
   "inspection_inspector",
@@ -610,6 +610,10 @@ export const customers = pgTable("customers", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byAccount: index("customers_account_idx").on(t.accountId),
+  // Dedupe rule (review item B 2026-04-27): hard-dedupe on (accountId, lower(email), lower(displayName)).
+  // Soft suggestion via lower(phone) match in UI. Manual merge for everything else.
+  // Indexes below serve both the hard rule and the soft suggestion. Final rule
+  // captured in 04-field-mapping.md when that doc ships.
   byAccountEmail: index("customers_account_email_idx").on(t.accountId, sql`lower(${t.email})`),
   byAccountName: index("customers_account_name_idx").on(t.accountId, sql`lower(${t.displayName})`),
   byAccountIsnSource: uniqueIndex("customers_account_isn_source_unique").on(t.accountId, t.isnSourceId).where(sql`${t.isnSourceId} IS NOT NULL`),
@@ -667,9 +671,12 @@ export const properties = pgTable("properties", {
 
   notes: text("notes"),
 
-  // GAP: dedupe strategy on physical address. Strict match on (address1, city,
-  // state, zip) lowercased after normalization, OR a third-party validator on
-  // ingest. Decision deferred to 04-field-mapping.md.
+  // Dedupe rule (review item C 2026-04-27): strict match on lowercased,
+  // whitespace-normalized (address1, city, state, zip) within an account.
+  // No third-party USPS/Smarty validation today. When a real merge problem
+  // surfaces (collisions on legitimately distinct addresses, or splits on
+  // formatting variants), upgrade to USPS-validated normalization. Trade
+  // documented in rationale doc.
 
   // Soft-delete (security spec S4)
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -736,6 +743,11 @@ export const transactionParticipants = pgTable("transaction_participants", {
   phone: varchar("phone", { length: 50 }),                           // PII: phone
   mobile: varchar("mobile", { length: 50 }),                         // PII: phone
 
+  // primaryRole is a UI hint indicating the participant's typical role across
+  // transactions, NOT a strict classification. The actual role on a given
+  // inspection lives on inspection_participants.role_in_transaction. Used to
+  // power filtered lists like "show me realtors" without joining inspections.
+  // Review item F 2026-04-27.
   primaryRole: roleInTransactionEnum("primary_role"),
 
   notes: text("notes"),
@@ -767,6 +779,16 @@ export const transactionParticipants = pgTable("transaction_participants", {
 // Security:      PII (corporate contact info, not heavy personal). Soft-delete: yes via deletedAt/deletedBy/deleteReason; `active=false` is operational hide. RLS: account-scoped.
 // Scalability:   No partition key. Index on (account_id, lower(name)). Expected row count at 10x: ~5,000 per account.
 // Multi-business: SHARED-WITHIN-ACCOUNT with agency_businesses junction.
+//
+// Polymorphic note (review item A 2026-04-27): until a future `organizations`
+// table lands, this table holds three flavors of corporate entity:
+//   - real estate brokerages (the original, dominant case)
+//   - lender institutions (when transaction_participants.primaryRole = 'lender')
+//   - law firms (when transaction_participants.primaryRole = 'attorney')
+// Application code distinguishes by inspecting the linked transaction_participants
+// rows. Long-term, an `organizations` table with a type discriminator replaces
+// this overload; agencies become a thin alias or migrate forward. Documented in
+// rationale and spec 08 worked example for the future expansion.
 export const agencies = pgTable("agencies", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
@@ -832,6 +854,12 @@ export const services = pgTable("services", {
   description: text("description"),
   publicDescription: text("public_description"),
 
+  // Optional grouping for UI dropdowns and reports. For Safe House (inspection),
+  // examples include "Inspection", "Sampling", "Reinspection". For HCJ (pool),
+  // "Chemical Service", "Equipment Service", "Leak Detection". For Pest Heroes,
+  // "Termite", "General Pest", "Mosquito". Nullable.
+  category: varchar("category", { length: 100 }),
+
   baseFee: decimal("base_fee", { precision: 10, scale: 2 }).notNull(),
   defaultDurationMinutes: integer("default_duration_minutes").notNull().default(180),
   sequence: integer("sequence").default(100).notNull(),
@@ -848,6 +876,7 @@ export const services = pgTable("services", {
 }, (t) => ({
   byBusiness: index("services_business_idx").on(t.businessId),
   byBusinessActive: index("services_business_active_idx").on(t.businessId, t.active),
+  byBusinessCategory: index("services_business_category_idx").on(t.businessId, t.category).where(sql`${t.category} IS NOT NULL`),
   byBusinessIsnSource: uniqueIndex("services_business_isn_source_unique").on(t.businessId, t.isnSourceId).where(sql`${t.isnSourceId} IS NOT NULL`),
 }));
 
@@ -866,7 +895,7 @@ export const services = pgTable("services", {
 // Security:      No PII. RLS: account-and-business-scoped via business FK chain. Soft-delete: NO; rows are deleted/reissued when hours change.
 // Scalability:   Indexes on (user_id, business_id). Expected row count at 10x: ~25,000 across all accounts (50 inspectors per account avg × 7 days × 1-2 windows).
 // Multi-business: SCOPED. New business onboarding adds rows scoped to that business.
-export const inspectorHours = pgTable("inspector_hours", {
+export const technicianHours = pgTable("technician_hours", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -879,14 +908,14 @@ export const inspectorHours = pgTable("inspector_hours", {
   lastModifiedBy: uuid("last_modified_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-  byUserBiz: index("inspector_hours_user_biz_idx").on(t.userId, t.businessId),
+  byUserBiz: index("technician_hours_user_biz_idx").on(t.userId, t.businessId),
 }));
 
 // Table: inspector_time_off
 // Security:      No PII directly (reason text could in rare cases include sensitive context, e.g., medical leave). Soft-delete: NO; rows are removed when time-off ends or is cancelled.
 // Scalability:   Indexes on (user_id, business_id), (starts_at, ends_at). Expected row count at 10x: ~2,500 active windows across all accounts.
 // Multi-business: SCOPED. New business onboarding adds rows scoped to that business.
-export const inspectorTimeOff = pgTable("inspector_time_off", {
+export const technicianTimeOff = pgTable("technician_time_off", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -897,15 +926,15 @@ export const inspectorTimeOff = pgTable("inspector_time_off", {
   lastModifiedBy: uuid("last_modified_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
-  byUserBiz: index("inspector_time_off_user_biz_idx").on(t.userId, t.businessId),
-  byWindow: index("inspector_time_off_window_idx").on(t.startsAt, t.endsAt),
+  byUserBiz: index("technician_time_off_user_biz_idx").on(t.userId, t.businessId),
+  byWindow: index("technician_time_off_window_idx").on(t.startsAt, t.endsAt),
 }));
 
 // Table: inspector_zips
 // Security:      No PII. RLS: account-and-business-scoped via business FK chain. Soft-delete: NO; territory rows are added/removed directly.
 // Scalability:   PK (user_id, business_id, zip). Index on (zip, business_id) for slot computation lookups. Expected row count at 10x: ~50,000 (50 inspectors × 200 ZIPs avg × multi-account).
 // Multi-business: SCOPED. New business onboarding adds rows scoped to that business.
-export const inspectorZips = pgTable("inspector_zips", {
+export const technicianZips = pgTable("technician_zips", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
   zip: varchar("zip", { length: 20 }).notNull(),
@@ -915,14 +944,14 @@ export const inspectorZips = pgTable("inspector_zips", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.userId, t.businessId, t.zip] }),
-  byZipBiz: index("inspector_zips_zip_biz_idx").on(t.zip, t.businessId),
+  byZipBiz: index("technician_zips_zip_biz_idx").on(t.zip, t.businessId),
 }));
 
 // Table: inspector_service_durations
 // Security:      No PII. RLS: account-and-business-scoped via service FK chain (services carries business_id; account inherits).
 // Scalability:   PK (user_id, service_id). Expected row count at 10x: ~10,000 (50 inspectors × ~5 services with overrides × multi-account).
 // Multi-business: SCOPED via parent service.
-export const inspectorServiceDurations = pgTable("inspector_service_durations", {
+export const technicianServiceDurations = pgTable("technician_service_durations", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   serviceId: uuid("service_id").notNull().references(() => services.id, { onDelete: "cascade" }),
   durationMinutes: integer("duration_minutes").notNull(),
@@ -1204,7 +1233,7 @@ export const auditLog = pgTable("audit_log", {
     sql`entity_type IN (
       'account','business','user','user_credential','user_security','user_mfa_factor','user_business','user_role',
       'customer','property','customer_business','property_business','customer_property','transaction_participant','agency','agency_business',
-      'service','inspector_hours','inspector_time_off','inspector_zip','inspector_service_duration',
+      'service','technician_hours','technician_time_off','technician_zip','technician_service_duration',
       'inspection','inspection_inspector','inspection_participant','inspection_service','reschedule_history',
       'login_attempt','session','export_job','system'
     )`
@@ -1254,10 +1283,10 @@ export const insertTransactionParticipantSchema = createInsertSchema(transaction
 export const insertAgencySchema = createInsertSchema(agencies).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertAgencyBusinessSchema = createInsertSchema(agencyBusinesses).omit({ firstSeenAt: true, lastActivityAt: true });
 export const insertServiceSchema = createInsertSchema(services).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertInspectorHoursSchema = createInsertSchema(inspectorHours).omit({ id: true, createdAt: true });
-export const insertInspectorTimeOffSchema = createInsertSchema(inspectorTimeOff).omit({ id: true, createdAt: true });
-export const insertInspectorZipSchema = createInsertSchema(inspectorZips).omit({ createdAt: true });
-export const insertInspectorServiceDurationSchema = createInsertSchema(inspectorServiceDurations).omit({ createdAt: true });
+export const insertInspectorHoursSchema = createInsertSchema(technicianHours).omit({ id: true, createdAt: true });
+export const insertInspectorTimeOffSchema = createInsertSchema(technicianTimeOff).omit({ id: true, createdAt: true });
+export const insertInspectorZipSchema = createInsertSchema(technicianZips).omit({ createdAt: true });
+export const insertInspectorServiceDurationSchema = createInsertSchema(technicianServiceDurations).omit({ createdAt: true });
 export const insertInspectionSchema = createInsertSchema(inspections).omit({ id: true, createdAt: true, updatedAt: true, orderNumber: true });
 export const insertInspectionInspectorSchema = createInsertSchema(inspectionInspectors).omit({ assignedAt: true });
 export const insertInspectionParticipantSchema = createInsertSchema(inspectionParticipants).omit({ createdAt: true });
@@ -1295,10 +1324,10 @@ export type Agency = typeof agencies.$inferSelect;
 export type AgencyBusiness = typeof agencyBusinesses.$inferSelect;
 export type Service = typeof services.$inferSelect;
 export type InsertService = z.infer<typeof insertServiceSchema>;
-export type InspectorHours = typeof inspectorHours.$inferSelect;
-export type InspectorTimeOff = typeof inspectorTimeOff.$inferSelect;
-export type InspectorZip = typeof inspectorZips.$inferSelect;
-export type InspectorServiceDuration = typeof inspectorServiceDurations.$inferSelect;
+export type InspectorHours = typeof technicianHours.$inferSelect;
+export type InspectorTimeOff = typeof technicianTimeOff.$inferSelect;
+export type InspectorZip = typeof technicianZips.$inferSelect;
+export type InspectorServiceDuration = typeof technicianServiceDurations.$inferSelect;
 export type Inspection = typeof inspections.$inferSelect;
 export type InsertInspection = z.infer<typeof insertInspectionSchema>;
 export type InspectionInspector = typeof inspectionInspectors.$inferSelect;
