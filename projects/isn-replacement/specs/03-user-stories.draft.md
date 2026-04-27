@@ -54,6 +54,18 @@ These apply to every story below unless explicitly overridden.
 - **AC-X6.** Authentication uses Passport sessions per the existing Replit pattern. MFA enforcement follows `accounts.config.security` policy.
 - **AC-X7.** All datetimes display in the user's local timezone (configured per user; default account timezone). Storage is `timestamptz` (UTC) per schema D3.
 - **AC-X8.** Forms validate via Zod schemas shared between client and server (existing project pattern).
+- **AC-X9.** Every story specifies the granular permission(s) it requires. Stories list `requires:` near the acceptance criteria. Effective permissions resolve from the user's role defaults plus per-user overrides minus per-user denies (see `06-security-spec.md` S11). UI elements that gate a story (buttons, links, menu items) hide or disable when the user lacks the required permission.
+
+### Permission references convention
+
+Each story includes a `**requires:**` line listing the granular permissions or groups needed to perform the action. Format examples:
+
+- `requires: edit.inspection.assign` (single granular permission)
+- `requires: customer_data` (single group)
+- `requires: edit.inspection AND view.customer.pii` (multiple, all required)
+- `requires: cancel.inspection (sensitive)` (sensitive permission, triggers enhanced audit)
+
+Groups expand to their member permissions at resolution time. A story that says `requires: customer_data` is satisfied if the user has the `customer_data` group OR any equivalent set of granular permissions. Granular denies override group grants per the resolution algorithm.
 
 ## Owner
 
@@ -64,6 +76,8 @@ Owners are accountable for the business outcomes and the platform. At Safe House
 **As an** Owner with multiple businesses in my account,
 **I want to** switch which business I am viewing in one click,
 **so that** I can see Safe House, HCJ, or Pest Heroes data without separate logins.
+
+**requires:** `view.business` (in each business they switch to; controlled by `user_businesses` membership not by permissions)
 
 **Acceptance criteria:**
 
@@ -78,6 +92,8 @@ Owners are accountable for the business outcomes and the platform. At Safe House
 **I want to** see a roll-up dashboard across all my businesses,
 **so that** I can monitor revenue, volume, and operational health without drilling into each business.
 
+**requires:** `view.cross_business AND view.financial AND view.dashboard`
+
 **Acceptance criteria:**
 
 - Account dashboard shows: total inspections this month and this quarter (count, revenue), per-business breakdown, top-N inspectors by volume, payment status distribution, signature status distribution, report-released percentage, recent cancellations.
@@ -90,6 +106,8 @@ Owners are accountable for the business outcomes and the platform. At Safe House
 **As an** Owner,
 **I want to** view and edit account-level settings,
 **so that** I control session timeouts, MFA enforcement, retention, and licensing config without engineering involvement.
+
+**requires:** `manage.account_config` (sensitive)
 
 **Acceptance criteria:**
 
@@ -106,6 +124,8 @@ Owners are accountable for the business outcomes and the platform. At Safe House
 **I want to** create a new business in my account or deactivate an existing one,
 **so that** I can adjust my multi-business portfolio without engineering involvement.
 
+**requires:** `manage.business` (sensitive)
+
 **Acceptance criteria:**
 
 - Add business: select type (`inspection | pool | pest | other`), name, slug (unique within account), branding fields. Save creates a `businesses` row with `displayOrder = MAX(displayOrder) + 1` within the account.
@@ -120,6 +140,8 @@ Owners are accountable for the business outcomes and the platform. At Safe House
 **I want to** see customers who have used more than one of my businesses,
 **so that** I can identify cross-sell opportunities and customer lifetime value across the account.
 
+**requires:** `view.cross_business AND view.customer.pii AND export.customer_list` (last permission only required for export action; sensitive)
+
 **Acceptance criteria:**
 
 - Cross-business report lists customers with `customer_businesses` rows in 2 or more businesses within the account.
@@ -127,9 +149,51 @@ Owners are accountable for the business outcomes and the platform. At Safe House
 - Report is read-only; PII access logs as `read_sensitive`.
 - Available export to CSV, audit-logged with `action='export'`.
 
+### O-6. Manage permissions across the account
+
+**As an** Owner,
+**I want to** configure default role-to-permission mappings for my account, and grant or deny specific permissions per user across any business,
+**so that** I have fine-grained control over capabilities for staff who need exceptions to default role behavior.
+
+**requires:** `manage.user.permissions AND manage.account_config` (both sensitive; group grants and individual permission grants both supported)
+
+**Acceptance criteria:**
+
+- Permissions admin page lists all roles in the account with their current default permissions and groups (sourced from `role_permissions`).
+- Owner can add or remove individual permissions or groups from a role's defaults. Adding triggers an `audit_log` entry with `action='create'`, `entity_type='role_permission'`. Removing triggers `action='delete'`.
+- Owner can navigate to any user in any business they own and view that user's effective permissions: role defaults plus grants minus denies.
+- Owner can grant or deny a specific permission or group to a specific user in a specific business via the `user_permission_overrides` table.
+- Each override grant or deny requires a `reason` text field (mandatory for sensitive permissions; recommended for all). Optional `expiresAt` for time-limited overrides (vacation coverage, project access).
+- Granting a group displays an expansion preview showing what granular permissions it includes ("Granting `admin` will give Bob 8 permissions: ..."). Owner confirms before save.
+- Granting a sensitive permission or group requires MFA re-verification if `accounts.config.security.requireMfaForPermissionGrants` is true.
+- Denying a permission shows what role(s) the user has that include this permission, so the Owner sees the deny is intentional.
+- All grants and denies produce `audit_log` entries with `action='create'`, `entity_type='user_permission_override'`, `metadata.expanded_to` capturing the group expansion at grant time per S11.
+- Revocations produce `action='delete'` entries.
+- An overrides-by-user view lists all current grants and denies for an audit pass.
+- Effective permissions cache invalidates immediately on grant, deny, role change, or override expiration. Affected users see permission changes on next request, no logout required.
+
 ## Operations Manager
 
 Operations Manager runs the day-to-day for one or more businesses. Below are the most common stories.
+
+### OM-6. Manage permissions within my business
+
+**As an** Operations Manager,
+**I want to** grant or deny specific permissions per user within the businesses I manage,
+**so that** I can handle role exceptions (a trusted dispatcher with export rights, a bookkeeper who needs PII access for a specific case) without escalating to the account Owner.
+
+**requires:** `manage.user.permissions` (sensitive; scoped to businesses where the Operations Manager has the `operations_manager` role)
+
+**Acceptance criteria:**
+
+- Operations Manager sees the same per-user permissions UI as the Owner (O-6), but scoped to users in businesses where they hold `operations_manager`.
+- Cannot edit `role_permissions` (account-level role defaults). Only Owner can.
+- Cannot grant the `owner` role or any account-admin permission (`manage.account_config`, `manage.account`, `manage.business`).
+- Cannot grant permissions they themselves do not have. The UI hides ungrantable permissions; the API rejects with `outcome='denied'` on attempts.
+- All grants and denies require a `reason` text. Mandatory for sensitive permissions.
+- Optional `expiresAt` for time-limited grants.
+- All actions audit-logged with `action='create'` or `'delete'`, `entity_type='user_permission_override'`, including the granting Operations Manager's id.
+- A daily summary email to the account Owner lists permission grants and denies issued by Operations Managers in their account (configurable; disabled by default for low-volume accounts, enabled for accounts above a threshold).
 
 ### OM-1. Manage technician roster
 
@@ -137,11 +201,13 @@ Operations Manager runs the day-to-day for one or more businesses. Below are the
 **I want to** add, deactivate, or update technicians for my business,
 **so that** the dispatch board reflects who is actually available.
 
+**requires:** `manage.user`
+
 **Acceptance criteria:**
 
 - Add technician: invite by email. System creates a `users` row with `status='invited'` and a `user_businesses` row in the active business, plus a `user_roles` row with `role='technician'`. Invitation email sent.
 - Activate technician (after invite): user accepts invitation, sets password, completes optional MFA enrollment. `users.status` flips to `active`, `users.emailVerifiedAt` populates.
-- Deactivate technician: set `user_businesses.status='inactive'`. Their `inspector_hours`, `inspector_zips`, and pending inspections remain; new assignments blocked.
+- Deactivate technician: set `user_businesses.status='inactive'`. Their `technician_hours`, `technician_zips`, and pending inspections remain; new assignments blocked.
 - Reactivate within the same business toggles `user_businesses.status='active'`.
 - All actions audit-logged.
 
@@ -150,6 +216,8 @@ Operations Manager runs the day-to-day for one or more businesses. Below are the
 **As an** Operations Manager,
 **I want to** set each technician's recurring weekly hours, time-off, ZIP coverage, and per-service durations,
 **so that** the slot-finding algorithm and dispatch board are accurate.
+
+**requires:** `manage.technician_availability`
 
 **Acceptance criteria:**
 
@@ -166,6 +234,8 @@ Operations Manager runs the day-to-day for one or more businesses. Below are the
 **I want to** create, edit, and retire services for my business,
 **so that** the booking intake and dispatch use the correct service definitions and fees.
 
+**requires:** `manage.service`
+
 **Acceptance criteria:**
 
 - Services list shows active and inactive services for the active business.
@@ -181,6 +251,8 @@ Operations Manager runs the day-to-day for one or more businesses. Below are the
 **I want to** grant or revoke roles for staff in my business,
 **so that** permissions match operational responsibility.
 
+**requires:** `manage.user.roles`
+
 **Acceptance criteria:**
 
 - Role grants: add a `user_roles` row for `(user_id, business_id, role)`. Optional `expiresAt` for time-limited grants (vacation coverage, project access).
@@ -194,6 +266,8 @@ Operations Manager runs the day-to-day for one or more businesses. Below are the
 **As an** Operations Manager,
 **I want to** set notification routing per business (which emails go to whom),
 **so that** the right people get pinged for the right events.
+
+**requires:** `manage.business_config`
 
 **Acceptance criteria:**
 
@@ -211,6 +285,8 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **As a** Dispatcher,
 **I want to** create a new inspection from a phone call,
 **so that** I can capture the booking while I am on the call with the customer or realtor.
+
+**requires:** `create.inspection AND customer_data`
 
 **Acceptance criteria:**
 
@@ -232,6 +308,8 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **I want to** see a real-time dashboard of all active inspections in my business,
 **so that** I can spot conflicts, gaps, and unassigned work.
 
+**requires:** `view.dashboard AND view.inspection`
+
 **Acceptance criteria:**
 
 - Dashboard lists inspections with `status IN (scheduled, confirmed, en_route, in_progress, on_hold)` and `deletedAt IS NULL`, ordered by `scheduledAt`.
@@ -246,6 +324,8 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **As a** Dispatcher,
 **I want to** assign an inspector to an unassigned inspection or change the assigned inspector,
 **so that** the dispatch reflects the current plan.
+
+**requires:** `edit.inspection.assign`
 
 **Acceptance criteria:**
 
@@ -262,13 +342,15 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **I want to** change the scheduled date/time of an inspection,
 **so that** I can accommodate customer requests or operational changes.
 
+**requires:** `edit.inspection.reschedule` (and `edit.inspection.assign` if reassigning inspector in the same modal)
+
 **Acceptance criteria:**
 
 - Reschedule modal shows current scheduled time, prompts for new date/time, optional inspector reassignment, mandatory reason text (free-form).
 - Validation: new time must be in the future, must respect business hours, must not collide with the assigned inspector's existing inspections (warn-not-block).
 - Save creates a `reschedule_history` row, increments the conceptual reschedule count (computed on demand from history), updates `inspections.scheduledAt`, optionally updates `inspections.leadInspectorId`.
 - Notifications: customer, lead inspector, transaction participants on the inspection (per their preferences).
-- Status: stays `scheduled` if a date is locked, transitions to `on_hold` if the new date is "TBD."
+- Status: stays `scheduled` if a date is locked, transitions to `on_hold` if the new date is "TBD." When transitioning to `on_hold`, `scheduledAt` is set to a placeholder per schema rationale convention.
 - Audit-logged with `action='reschedule'`.
 
 ### D-5. Cancel an inspection
@@ -276,6 +358,8 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **As a** Dispatcher,
 **I want to** cancel an inspection,
 **so that** the schedule reflects the customer's decision and the inspector is freed up.
+
+**requires:** `cancel.inspection` (sensitive)
 
 **Acceptance criteria:**
 
@@ -292,6 +376,8 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **I want to** ask the system "what slots are available for inspector X over the next 14 days?" or "which inspectors are available at 2pm Thursday?",
 **so that** I can answer customer questions on the phone immediately.
 
+**requires:** `view.calendar AND view.inspection`
+
 **Acceptance criteria:**
 
 - Slot finder UI accepts: optional inspector, date range (defaults to 14 days forward), optional service (drives duration), optional ZIP (filters by inspector ZIP coverage).
@@ -305,6 +391,8 @@ Dispatcher is the highest-touch role for the scheduling slice. The dispatcher bo
 **As a** Dispatcher,
 **I want to** mark an inspection as no-show when the customer or property access fails,
 **so that** the inspector's day is freed up and the customer is followed up correctly.
+
+**requires:** `edit.inspection.status` (and `override.no_show_fee` if waiving the fee)
 
 **Acceptance criteria:**
 
@@ -494,19 +582,102 @@ Clients do not have app login at v3 schema lock. Stories describe a future booki
 - Token-based download requires email match for re-download (no app login required).
 - Download audit-logged.
 
+## Bookkeeper
+
+Bookkeeper is a read-mostly role with write access on the financial axis. Stories below cover the most common workflows.
+
+### B-1. View financial dashboard
+
+**As a** Bookkeeper,
+**I want to** see a financial dashboard for my business,
+**so that** I can monitor billing health, outstanding payments, and reconciliation status.
+
+**requires:** `view.financial AND view.dashboard`
+
+**Acceptance criteria:**
+
+- Dashboard shows: outstanding invoice total, paid this month, paid this quarter, refunded total, disputed total, average days-to-pay, top-N customers by outstanding balance.
+- Per-customer drill-down lists their inspections with payment status, fee amount, paid date.
+- Bookkeeper sees customer names but NOT phone/email/address details by default. The `view` group default excludes `view.customer.pii`, and bookkeeper has an explicit deny for defense-in-depth (per spec 04 role mapping).
+- Customer name display uses `customers.displayName` only; PII column reads return masked values for this role.
+
+### B-2. Reconcile payments
+
+**As a** Bookkeeper,
+**I want to** mark inspections as paid when funds clear,
+**so that** the system reflects payment reality and downstream reports are accurate.
+
+**requires:** `manage.billing` (sensitive)
+
+**Acceptance criteria:**
+
+- Inspections list filtered to `paymentStatus IN (unpaid, partial, disputed)` shows the work queue.
+- Mark paid: select inspection, enter amount paid, payment date, payment method (Stripe/check/ACH/manual), reference (transaction id or check number). Save sets `paymentStatus='paid'` and creates a `payment_events` row (out of v3 schema scope; reused from existing Replit project).
+- Partial payment: similar form, sets `paymentStatus='partial'`.
+- Mark disputed: requires reason. Sets `paymentStatus='disputed'` and notifies the account Owner (per S10 sensitive permission audit policy).
+- All actions audit-logged with `action='update'`, `entity_type='inspection'`, `metadata.payment_action='reconcile|partial|dispute'`.
+
+### B-3. Export financial data for accounting
+
+**As a** Bookkeeper,
+**I want to** export inspections and payment events to a CSV that maps cleanly into QuickBooks,
+**so that** I do not have to copy numbers manually each month.
+
+**requires:** `export.financial AND export.inspection_list` (both sensitive)
+
+**Acceptance criteria:**
+
+- Export form: date range (defaults to last calendar month), business (defaults to active business; cross-business export requires `view.cross_business` and Owner role).
+- CSV format matches QuickBooks import expectations: invoice number, customer name (no PII fields), service descriptions, fee amount, paid amount, paid date, payment method, reference.
+- Export job runs as background work for >10,000 row exports; status visible in a jobs list.
+- Each export produces an `audit_log` entry with `action='export'`, `outcome='success|partial|denied|failed'`, `metadata.row_count`, `metadata.filters`.
+- Bookkeeper export does not include any PII columns. If a future report needs PII, owner-only override applies.
+
+### B-4. Process a refund
+
+**As a** Bookkeeper,
+**I want to** issue a refund against an inspection,
+**so that** the customer's payment is returned and the books reflect the credit.
+
+**requires:** `manage.refund` (sensitive)
+
+**Acceptance criteria:**
+
+- Refund form: select inspection, refund amount (defaults to fee paid), reason text (mandatory), refund destination (defaults to original payment method).
+- Save initiates the refund through the configured payment processor (Stripe), creates a `payment_events` row with `event_type='refunded'`, sets `inspections.paymentStatus='refunded'` if the full amount is refunded or `paymentStatus='partial'` if partial.
+- Refund completion (asynchronous) updates the row when the processor confirms.
+- Audit-logged with `action='update'`, `entity_type='inspection'`, `metadata.refund_amount`, `metadata.refund_reason`.
+- Owner is notified of all refunds above a configurable threshold (default $500) per S10 sensitive-action policy.
+
+### B-5. View audit trail of financial actions
+
+**As a** Bookkeeper,
+**I want to** see a chronological log of all financial actions (payments reconciled, refunds issued, disputes resolved) by user and timestamp,
+**so that** I can reconcile against bank statements and answer compliance questions.
+
+**requires:** `view.audit_log` (sensitive; not granted by default to bookkeeper, requires explicit override per the role mapping)
+
+**Acceptance criteria:**
+
+- Audit view filtered to `action IN (update, create)` and `entity_type IN (inspection, payment_event)` and a `metadata.payment_action` filter.
+- Per row: timestamp, user, action, entity, before/after snapshot of relevant fields (amount, status, method).
+- Default range: last 30 days. Adjustable.
+- Read-only.
+- Bookkeeper requires the `view.audit_log` permission as an explicit grant; the default `bookkeeper` role does not include it. The Owner grants this on a per-bookkeeper basis as needed (the typical case is "the senior bookkeeper has audit access; junior bookkeepers do not").
+
 ## Other roles (brief)
 
 ### Client Success
 
 Read-mostly access to inspections, customers, and communications. Can update customer contact info, send manual emails/SMS via templates, and resolve communication holds. Cannot create or cancel inspections.
 
-### Bookkeeper
-
-Read access to inspections and payment events for the active business. Write access to mark payments reconciled and trigger QuickBooks export. Cannot edit inspection details or staff records.
+**Default permission set:** `view`, `view_pii`, `customer_data` (subset), plus `view.report`. No edit on inspections directly except via communication-hold workflows.
 
 ### Viewer
 
 Read-only across the business they are assigned to. Used for auditors, partners, or restricted staff. Cannot trigger any action that modifies state.
+
+**Default permission set:** `view` group only, with explicit denies on `view.customer.pii`, `view.financial`, `view.audit_log`, `view.cross_business`, `view.inspection.internal_notes`.
 
 ## Workflow diagrams
 
@@ -676,7 +847,9 @@ stateDiagram-v2
     [*] --> on_hold : booking without date locked
 
     on_hold --> scheduled : reschedule with date locked
-    scheduled --> on_hold : reschedule without date
+    on_hold --> on_hold : reschedule without date (still pending)
+    on_hold --> cancelled : dispatcher cancels while on hold
+    scheduled --> on_hold : bumped from date, new date not yet locked
 
     scheduled --> confirmed : customer confirms via portal or comms
     scheduled --> cancelled : dispatcher cancels
@@ -697,6 +870,16 @@ stateDiagram-v2
 
     note right of completed : QA reopen path: completed -> in_progress\n(initialCompletedAt preserved)
 ```
+
+**`on_hold` clarifications:**
+
+- An inspection enters `on_hold` either at booking (no date locked) or via a reschedule that does not lock a new date.
+- While on hold, the inspection is not visible on inspector daily/calendar views. It appears on the dispatcher dashboard in a separate "Pending Schedule" section.
+- Cancellation from `on_hold` is allowed and follows the standard cancellation flow.
+- Transition out of `on_hold` requires either locking a date (transitions to `scheduled`) or cancelling.
+- An inspection cannot transition from `on_hold` directly to `confirmed`, `en_route`, `in_progress`, or `completed`. The date must lock first.
+- If a customer or realtor confirms an inspection while it is `on_hold`, the confirmation is accepted but the status stays `on_hold` until a date is locked. The `confirmedAt` timestamp populates regardless.
+- `scheduledAt` for `on_hold` inspections is set to a placeholder far-future timestamp per the schema rationale convention; final convention captured in `04-field-mapping.md`.
 
 ### W7. Bill-to-closing payment
 
