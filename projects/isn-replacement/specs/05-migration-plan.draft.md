@@ -67,10 +67,12 @@ Before any data migration runs, the seed migration populates system-managed refe
    - `email` = `system@<account-slug>.local`
    - `display_name` = `"System (seed)"`
    - `status` = `active`
-   - `password_hash`, `username`: NULL (cannot log in via password; SSO and login flows reject this user)
-   - `is_system_user`: NEW field considered but rejected; instead the system user is identified by its email pattern (`system@*.local`) and a runtime check rejects login attempts.
+   - `is_system` = TRUE (v3.1.1; canonical identification flag for system users)
+   - `password_hash`, `username`: NULL (cannot log in via password; SSO and login flows reject any user with is_system=true)
 
-   This system user becomes the `created_by` and `last_modified_by` for the seed `businesses` rows and seed `services` rows. It also becomes `granted_by=NULL` reference target where applicable, since `granted_by` is nullable.
+   This system user becomes the `created_by` and `last_modified_by` for the seed `businesses` rows, seed `services` rows, and other system-managed inserts. The `users_account_system_unique` partial unique index enforces exactly one system user per account.
+
+   Login enforcement: Passport authentication rejects any login attempt where the matched user has `is_system=TRUE`, regardless of credentials. Any such attempt produces an `audit_log` entry with `outcome='denied'` and an alert to the account Owner. See `06-security-spec.md` S11 "System user pattern" for full operational details.
 
 6. **`order_number` Postgres sequences.** Create one sequence per business: `order_number_seq_safehouse`, `order_number_seq_hcj_pools`, `order_number_seq_pest_heroes`. Each starts at 1.
 

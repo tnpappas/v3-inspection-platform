@@ -1,5 +1,5 @@
 /**
- * 01-schema.ts (v3, licensing-ready) — LOCKED 2026-04-27
+ * 01-schema.ts (v3.1.1, licensing-ready + RBAC + system user) — LOCKED 2026-04-27
  *
  * STATUS: LOCKED. Canonical schema for the rebuild. Subsequent changes follow
  * the migration-plan workflow (additive migrations, backwards-compatible
@@ -7,6 +7,12 @@
  * an explicit decision doc.
  *
  * Locked at git tag `v3-schema-locked` after Troy's approval 2026-04-27 15:22 UTC.
+ * v3.1 additions (2026-04-27 17-18 UTC): two-tier RBAC with granular permissions
+ * and permission groups. Additive only; no v3 column shapes changed. See
+ * 06-security-spec.md S11.
+ * v3.1.1 additions (2026-04-27 21:46 UTC): users.is_system boolean for the
+ * per-account system user pattern. Additive only. See 06-security-spec.md S11
+ * "System user pattern" subsection.
  * Predecessor drafts preserved as `01-schema.v1.draft.ts.superseded` and
  * `01-schema.v2.draft.ts.superseded` for design history.
  *
@@ -429,6 +435,17 @@ export const users = pgTable("users", {
 
   status: userStatusEnum("status").notNull().default("active"),
 
+  // System user flag (v3.1.1).
+  // TRUE for the per-account synthetic system user that owns seed-time author
+  // attribution (createdBy/lastModifiedBy on businesses, services, etc.). The
+  // system user is account-scoped (each licensee has their own), has
+  // password_hash=NULL, status='active' (so FK references resolve), but cannot
+  // log in: the auth flow rejects login attempts when is_system=true regardless
+  // of credentials provided. Each account has exactly one is_system=true user;
+  // a partial unique index enforces this. See 06-security-spec.md S11 "System
+  // user pattern" for the full operational specification.
+  isSystem: boolean("is_system").default(false).notNull(),
+
   // Migration provenance
   isnSourceId: uuid("isn_source_id"),                                // ISN: id (preserved through migration); unique within account
 
@@ -439,6 +456,8 @@ export const users = pgTable("users", {
   byAccountStatus: index("users_account_status_idx").on(t.accountId, t.status),
   byAccountEmail: uniqueIndex("users_account_email_unique").on(t.accountId, t.email),
   byAccountIsnSource: uniqueIndex("users_account_isn_source_unique").on(t.accountId, t.isnSourceId).where(sql`${t.isnSourceId} IS NOT NULL`),
+  // Exactly one system user per account (v3.1.1).
+  byAccountSystemUnique: uniqueIndex("users_account_system_unique").on(t.accountId).where(sql`${t.isSystem} = true`),
 }));
 
 // =============================================================================

@@ -324,8 +324,8 @@ export const DEFAULT_ROLE_PERMISSIONS_SEED: ReadonlyArray<DefaultRolePermissionR
   // customer_data is NOT granted in full; client_success can edit customer
   // contact info but not create properties or participants. Express via
   // individual permissions rather than the full customer_data group.
+  // view.report is already in the `view` group above; do not duplicate.
   { role: "client_success", permissionKey: "edit.customer" },
-  { role: "client_success", permissionKey: "view.report" },
 
   // ----- bookkeeper -----
   // Note: bookkeeper does NOT get view_pii. They see customer names but PII
@@ -404,3 +404,113 @@ export function verifyAdminAccountAdminInvariant(): { ok: boolean; missing: stri
   }
   return { ok: missing.length === 0, missing };
 }
+
+/**
+ * Verifies that every permission_key referenced in GROUP_MEMBERS_SEED,
+ * DEFAULT_ROLE_PERMISSIONS_SEED, and ROLE_IMPLICIT_DENIES exists in
+ * PERMISSIONS_SEED. Catches typos in group memberships and role mappings.
+ * Run as a unit test in CI.
+ */
+export function verifyPermissionKeyExistence(): { ok: boolean; missing: string[] } {
+  const validKeys = new Set(PERMISSIONS_SEED.map((p) => p.key));
+  const missing = new Set<string>();
+
+  for (const gm of GROUP_MEMBERS_SEED) {
+    if (!validKeys.has(gm.permissionKey)) missing.add(gm.permissionKey);
+  }
+  for (const rp of DEFAULT_ROLE_PERMISSIONS_SEED) {
+    if (rp.permissionKey && !validKeys.has(rp.permissionKey)) missing.add(rp.permissionKey);
+  }
+  for (const rd of ROLE_IMPLICIT_DENIES) {
+    if (!validKeys.has(rd.permissionKey)) missing.add(rd.permissionKey);
+  }
+
+  return { ok: missing.size === 0, missing: Array.from(missing).sort() };
+}
+
+/**
+ * Verifies that every group_key referenced in GROUP_MEMBERS_SEED and
+ * DEFAULT_ROLE_PERMISSIONS_SEED exists in PERMISSION_GROUPS_SEED. Catches
+ * typos in group memberships and role mappings. Run as a unit test in CI.
+ */
+export function verifyGroupKeyExistence(): { ok: boolean; missing: string[] } {
+  const validKeys = new Set(PERMISSION_GROUPS_SEED.map((g) => g.key));
+  const missing = new Set<string>();
+
+  for (const gm of GROUP_MEMBERS_SEED) {
+    if (!validKeys.has(gm.groupKey)) missing.add(gm.groupKey);
+  }
+  for (const rp of DEFAULT_ROLE_PERMISSIONS_SEED) {
+    if (rp.groupKey && !validKeys.has(rp.groupKey)) missing.add(rp.groupKey);
+  }
+
+  return { ok: missing.size === 0, missing: Array.from(missing).sort() };
+}
+
+// =============================================================================
+// ROLE_IMPLICIT_DENIES
+// =============================================================================
+// Per `06-security-spec.md` S11 "Implicit role denies pattern": role conventions
+// that should be denied at user-creation time are seeded as user_permission_overrides
+// rows with effect='deny', NOT as role_permissions rows.
+//
+// When a user is created and granted a role, the application:
+//   1. Inserts the user_roles row.
+//   2. Looks up implicit denies for that role from this constant.
+//   3. Inserts a user_permission_overrides row per implicit deny.
+//
+// Adding a role or changing implicit denies updates this constant and triggers
+// a migration that retroactively applies new denies to existing users.
+//
+// CI test verifyPermissionKeyExistence() asserts every implicit deny references
+// a valid permission key.
+
+type RoleImplicitDeny = {
+  role: Role;
+  permissionKey: string;
+  reason: string;  // becomes the `reason` field on the user_permission_overrides row
+};
+
+export const ROLE_IMPLICIT_DENIES: ReadonlyArray<RoleImplicitDeny> = [
+  // ----- bookkeeper -----
+  // Bookkeeper sees customer names but not PII details. Defense-in-depth deny
+  // even though the default role does not include view_pii (the deny stays in
+  // place if a future change adds PII to the view group).
+  { role: "bookkeeper", permissionKey: "view.customer.pii", reason: "role default deny: bookkeeper PII restriction" },
+  { role: "bookkeeper", permissionKey: "view.user.roles", reason: "role default deny: bookkeeper does not need role visibility" },
+  { role: "bookkeeper", permissionKey: "view.audit_log", reason: "role default deny: bookkeeper audit access requires explicit grant per S11" },
+  { role: "bookkeeper", permissionKey: "view.cross_business", reason: "role default deny: bookkeeper scoped to active business" },
+  { role: "bookkeeper", permissionKey: "view.inspection.internal_notes", reason: "role default deny: bookkeeper does not see internal notes" },
+
+  // ----- viewer -----
+  // Read-only across the business. All write/delete/admin operations denied.
+  { role: "viewer", permissionKey: "view.customer.pii", reason: "role default deny: viewer no PII" },
+  { role: "viewer", permissionKey: "view.financial", reason: "role default deny: viewer no financial" },
+  { role: "viewer", permissionKey: "view.audit_log", reason: "role default deny: viewer no audit" },
+  { role: "viewer", permissionKey: "view.cross_business", reason: "role default deny: viewer scoped to active business" },
+  { role: "viewer", permissionKey: "view.inspection.internal_notes", reason: "role default deny: viewer no internal notes" },
+  { role: "viewer", permissionKey: "edit.inspection", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.inspection.assign", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.inspection.reschedule", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.inspection.status", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.customer", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.property", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.transaction_participant", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "edit.agency", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "create.inspection", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "create.customer", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "create.property", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "create.transaction_participant", reason: "role default deny: viewer is read-only" },
+  { role: "viewer", permissionKey: "cancel.inspection", reason: "role default deny: viewer no cancellation" },
+  { role: "viewer", permissionKey: "delete.inspection", reason: "role default deny: viewer no delete" },
+
+  // ----- client_success -----
+  // Client success handles customer support; cannot create or destructively act
+  // on records. The grant set already excludes most of these, but explicit denies
+  // ensure defense-in-depth.
+  { role: "client_success", permissionKey: "delete.inspection", reason: "role default deny: client_success cannot delete" },
+  { role: "client_success", permissionKey: "cancel.inspection", reason: "role default deny: client_success cannot cancel; dispatcher work" },
+  { role: "client_success", permissionKey: "create.inspection", reason: "role default deny: client_success cannot create inspections; dispatcher work" },
+  { role: "client_success", permissionKey: "create.customer", reason: "role default deny: client_success cannot create customers; dispatcher work" },
+  { role: "client_success", permissionKey: "create.property", reason: "role default deny: client_success cannot create properties; dispatcher work" },
+] as const;
