@@ -7,6 +7,11 @@
  * separated users and operations per business. See:
  *   ../decisions/2026-04-26-multi-business-architecture.md
  *
+ * Foundational principles every table is evaluated against:
+ *   - Security spec:                ./06-security-spec.md
+ *   - Scalability spec:             ./07-scalability-spec.md
+ *   - Multi-business extensibility: ./08-multi-business-extensibility-spec.md
+ *
  * Source of truth:
  * - v1 superseded:           ./01-schema.v1.draft.ts.superseded (design history)
  * - Existing Replit project: ../replit-snapshot/shared/schema.ts (reuse where possible)
@@ -16,12 +21,16 @@
  * - Existing Replit state:   ../discovery/existing-replit-state.md
  * - Design decisions:        ../decisions/2026-04-26-design-decisions.md
  * - Architecture decision:   ../decisions/2026-04-26-multi-business-architecture.md
+ * - Phase 2 pilot findings:  ../discovery/07-phase2-pilot-findings.md
+ * - Phase 2 augment+history: ../discovery/08-phase2-augment-history-findings.md
+ * - Schema rationale draft:  ./01-schema-rationale.draft.md
  *
  * Conventions:
  * - All TS strict.
  * - Drizzle pgTable + drizzle-zod insert schemas.
  * - Column comments include the ISN source field where applicable ("ISN: <field>").
  * - "NEW" tag on fields the rebuild adds that ISN does not surface.
+ * - PII columns marked inline with `// PII: <type>` per security spec S2.
  * - Decisions D1 (per-business role overlap), D2 (pagination), D3 (timestamptz),
  *   D5 (sizing as input data), and the multi-business architecture decision applied.
  * - Gaps marked "// GAP:" inline. Fill from Phase 2 + 3 results before locking.
@@ -31,6 +40,19 @@
  * - Tables that are SCOPED to a business carry `business_id` (always not-null,
  *   except where the row could legitimately be account-level).
  * - Cross-business activity tracking lives in `*_businesses` junctions.
+ *
+ * Per-table principle annotations:
+ * Every table block is preceded by a four-line header confirming evaluation:
+ *   // Table: <name>
+ *   // Security:      <PII fields | none>, <encryption notes>, <soft-delete: yes/no>, <RLS: business-scoped | shared | system>
+ *   // Scalability:   <partition key | none>, <hot indexes>, <expected row count at 10x>
+ *   // Multi-business: <shared | scoped | junction>, <how it adapts when a new business is added>
+ *
+ * NOTE on PII markers and soft-delete columns: the v2 draft below shows the
+ * principle annotations on EVERY table. Soft-delete columns (deletedAt,
+ * deletedBy, deleteReason) are present where the table holds PII or operational
+ * history per security spec S4. They were NOT in the v1 draft; their addition
+ * is part of this annotation pass and is open for review.
  */
 
 import { sql } from "drizzle-orm";
@@ -111,6 +133,10 @@ export type RoleInTransaction = (typeof ROLES_IN_TRANSACTION)[number];
 // =============================================================================
 // businesses
 // =============================================================================
+// Table: businesses
+// Security:      PII (none, business contact info is corporate, not personal). No encryption needed. Soft-delete: yes via `status='inactive'` (no PII to wipe). RLS: shared (every authenticated user can see businesses they belong to via user_businesses).
+// Scalability:   No partition key. Index on (status). Expected row count at 10x: ~10 rows. This table never grows past dozens.
+// Multi-business: SHARED. Adding a new business is one INSERT into this table per spec 08 M1 and the worked example. No schema change to other tables.
 export const businesses = pgTable("businesses", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name", { length: 255 }).notNull(),
@@ -146,6 +172,10 @@ export const businesses = pgTable("businesses", {
 // =============================================================================
 // users (no single-business assumption)
 // =============================================================================
+// Table: users
+// Security:      PII heavy (name, email, phone, address, license, photo). Encryption at rest required for password_hash; PII column-level encryption decision deferred to security spec finalization. Soft-delete: yes via `status='inactive'` plus optional deleted_at. RLS: shared (users themselves are global; access to a user's data is gated via user_businesses membership).
+// Scalability:   No partition key. Indexes on (status), (email) unique. Expected row count at 10x: ~3,000 (50 active inspectors per business + customer-success + dispatchers + bookkeeping + dormant + multi-business owners).
+// Multi-business: SHARED. A user can belong to many businesses via user_businesses. Adding a new business does not touch this table.
 // Internal team only. Customers and realtors live in `customers` and
 // `transaction_participants`.
 // Per D1 (multi-business update): roles live in `user_roles` keyed by
@@ -199,6 +229,11 @@ export const users = pgTable("users", {
 // =============================================================================
 // user_businesses (membership)
 // =============================================================================
+// Table: user_businesses
+// Security:      No PII directly. References users.id and businesses.id. RLS: business-scoped on read (a user only sees their own memberships and the memberships of users in businesses they manage). Soft-delete: yes via `status='inactive'`.
+// Scalability:   PK is composite (user_id, business_id). Indexes on (business_id), (user_id). Expected row count at 10x: ~5,000 (3,000 users × ~1.5 average business membership). Small.
+// Multi-business: JUNCTION. Core mechanism for adding a user to a new business. No schema change when a new business is added; INSERT a row.
+
 // Tells us which businesses each user belongs to. is_primary is the user's
 // "home" business; UI defaults to it on login.
 export const userBusinesses = pgTable("user_businesses", {
@@ -218,6 +253,11 @@ export const userBusinesses = pgTable("user_businesses", {
 // =============================================================================
 // user_roles (per-business)
 // =============================================================================
+// Table: user_roles
+// Security:      No PII directly. Drives permission decisions, so RLS-aware. Soft-delete: rows are removed (revocation), with a corresponding audit_log entry instead of soft-delete. Read-audit on this table per S5 because role grants are sensitive.
+// Scalability:   PK is composite (user_id, business_id, role). Index on (business_id, role) for "who has role X in business Y" queries. Expected row count at 10x: ~10,000.
+// Multi-business: JUNCTION. New business adds rows here for relevant staff; no schema change.
+
 // D1 + multi-business: role assignments are per (user, business). A user can
 // hold roles in multiple businesses simultaneously.
 export const userRoles = pgTable("user_roles", {
@@ -234,6 +274,11 @@ export const userRoles = pgTable("user_roles", {
 // =============================================================================
 // Customers (shared, no business_id)
 // =============================================================================
+// Table: customers
+// Security:      PII heavy (name, email, multiple phones, mailing address). Column-level encryption candidate for email and phone (these get queried for dedupe; encryption strategy must support deterministic encryption or HMAC index for search). Soft-delete: yes (deletedAt, deletedBy, deleteReason). RLS: shared with cross-business access enforced through customer_businesses, but RLS itself is permissive at this table; the API layer (and S8 export gate) enforces business scoping on reads.
+// Scalability:   No partition key. Indexes on (email lower-case), (display_name lower-case), unique on isn_source_id. Expected row count at 10x: 100,000+. The dedupe lookups on email and address are hot.
+// Multi-business: SHARED. customer_businesses junction tracks which businesses have transacted with each customer. Adding a new business does not touch this table.
+
 // People who pay us / receive service. Reusable across all businesses.
 // ISN's `clients` map mostly here. Edge cases handled in migration plan.
 export const customers = pgTable("customers", {
@@ -278,6 +323,10 @@ export const customers = pgTable("customers", {
 // customer_businesses junction
 // "Which businesses has this customer used."
 // Updated as activity occurs (or backfilled in migration).
+// Table: customer_businesses
+// Security:      No PII directly. RLS: business-scoped (a user can only see customer_businesses rows for their businesses).
+// Scalability:   PK is composite (customer_id, business_id). Indexes on (business_id), (last_activity_at). Expected row count at 10x: ~150,000 (100K customers × 1.5 average business cross-use).
+// Multi-business: JUNCTION. Core cross-business activity tracker.
 export const customerBusinesses = pgTable("customer_businesses", {
   customerId: uuid("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -293,6 +342,11 @@ export const customerBusinesses = pgTable("customer_businesses", {
 // =============================================================================
 // Properties (shared, no business_id)
 // =============================================================================
+// Table: properties
+// Security:      PII (address is PII when tied to a customer, location_precise via lat/long is PII). Encryption candidate for address fields. Soft-delete: yes (deletedAt, deletedBy, deleteReason). RLS: shared, with API and export gates enforcing business scoping.
+// Scalability:   No partition key. Indexes on (zip), (city, state), (lower(address1), zip). Expected row count at 10x: 100,000+. Property dedupe on (address1, city, state, zip) is hot.
+// Multi-business: SHARED. property_businesses junction tracks usage. New business adds rows in junction, not in properties.
+
 // Real-world physical properties. A property serviced by Safe House (inspection)
 // could also be serviced by HCJ (pool) or Pest Heroes (pest). Property fields
 // previously inline on `inspections` move here.
@@ -341,6 +395,10 @@ export const properties = pgTable("properties", {
 
 // property_businesses junction
 // "Which businesses have serviced this property."
+// Table: property_businesses
+// Security:      No PII directly. RLS: business-scoped.
+// Scalability:   PK composite (property_id, business_id). Index on (business_id). Expected row count at 10x: ~150,000.
+// Multi-business: JUNCTION.
 export const propertyBusinesses = pgTable("property_businesses", {
   propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -354,6 +412,10 @@ export const propertyBusinesses = pgTable("property_businesses", {
 
 // Optional link: customer to property (for repeat customers at the same place,
 // or rental scenarios where the customer doesn't own the property). Many-to-many.
+// Table: customer_properties
+// Security:      No PII directly. RLS: business-scoped through both ends (a user sees rows where the customer or property has a customer_businesses or property_businesses row in one of their businesses).
+// Scalability:   PK composite (customer_id, property_id). Expected row count at 10x: ~120,000 (most customers tied to ~1 property, repeat customers and rental scenarios add a tail).
+// Multi-business: SHARED. The relationship is business-agnostic.
 export const customerProperties = pgTable("customer_properties", {
   customerId: uuid("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
   propertyId: uuid("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
@@ -367,6 +429,11 @@ export const customerProperties = pgTable("customer_properties", {
 // =============================================================================
 // Transaction participants (shared, no business_id)
 // =============================================================================
+// Table: transaction_participants
+// Security:      PII (name, email, phone). Same encryption posture as customers. Soft-delete: yes (deletedAt, deletedBy, deleteReason). RLS: shared, API/export gates enforce business scoping through inspection_participants links.
+// Scalability:   No partition key. Indexes on (email), (agency_id). Expected row count at 10x: ~50,000 (realtors, TCs, escrow, insurance for the territories we operate in).
+// Multi-business: SHARED. The same realtor can participate in inspections, pool jobs, and pest treatments. Linkage via per-op participant junctions.
+
 // Realtors, transaction coordinators, escrow officers, insurance agents.
 // Distinct from customers. Linked to operations via operation-specific
 // junctions (today: inspection_participants).
@@ -406,6 +473,10 @@ export const transactionParticipants = pgTable("transaction_participants", {
 // =============================================================================
 // Agencies (shared with junction)
 // =============================================================================
+// Table: agencies
+// Security:      PII (corporate contact info, not heavy personal). Encryption not required at column level. Soft-delete: yes via `active=false` plus optional deletedAt. RLS: shared, API enforces business scoping through agency_businesses.
+// Scalability:   No partition key. Index on lower(name). Expected row count at 10x: ~5,000 brokerages and similar.
+// Multi-business: SHARED with agency_businesses junction.
 export const agencies = pgTable("agencies", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name", { length: 255 }).notNull(),
@@ -426,6 +497,10 @@ export const agencies = pgTable("agencies", {
   byNameLower: index("agencies_name_lower_idx").on(sql`lower(${t.name})`),
 }));
 
+// Table: agency_businesses
+// Security:      No PII directly. RLS: business-scoped.
+// Scalability:   PK composite (agency_id, business_id). Expected row count at 10x: ~6,000.
+// Multi-business: JUNCTION.
 export const agencyBusinesses = pgTable("agency_businesses", {
   agencyId: uuid("agency_id").notNull().references(() => agencies.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
@@ -442,6 +517,10 @@ export const agencyBusinesses = pgTable("agency_businesses", {
 // =============================================================================
 // ISN's /ordertypes/ has no duration. We add it. Inspector overrides via
 // inspector_service_durations.
+// Table: services
+// Security:      No PII. RLS: business-scoped at DB layer. Soft-delete via `active=false`.
+// Scalability:   No partition key. Indexes on (business_id), (active). Expected row count at 10x: ~200 (low-cardinality config).
+// Multi-business: SCOPED. Each business defines its own service catalog. Adding a new business adds new rows here scoped to that business.
 export const services = pgTable("services", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "restrict" }),
@@ -468,6 +547,13 @@ export const services = pgTable("services", {
 // =============================================================================
 // Technician availability (business-scoped)
 // =============================================================================
+// Tables: inspector_hours, inspector_time_off, inspector_zips, inspector_service_durations
+// Security:      No PII. RLS: business-scoped at DB layer.
+// Scalability:   inspector_hours: ~5,000 rows at 10x (50 inspectors × 7 days × 1-2 windows). inspector_time_off: rolling, ~500 active rows. inspector_zips: ~10,000 rows (50 inspectors × 200 ZIPs avg). inspector_service_durations: ~2,000 rows. None partitioned. All keyed by (user_id, business_id) for hot lookups.
+// Multi-business: SCOPED. Per the spec 08 M3 decision, availability is keyed per-business so a user who serves multiple businesses has separate hours per business.
+//
+// Naming open question (spec 08 open item #2): rename to technician_* to match
+// the per-business term? Deferred until Troy reviews.
 // "Technician" is the unified term across business types. Inspector at Safe
 // House is a technician with role=technician in the Safe House business. Same
 // for pool tech and pest tech.
@@ -527,6 +613,10 @@ export const inspectorServiceDurations = pgTable("inspector_service_durations", 
 // =============================================================================
 // Pattern other operational tables (pool_jobs, pest_treatments) will mirror
 // when they are built.
+// Table: inspections
+// Security:      PII via FKs (customer, property, participants). Direct PII: special_instructions and internal_notes can contain notes about the property/owner. Encryption candidate for special_instructions (free text) deferred. Soft-delete: yes (deletedAt, deletedBy, deleteReason); cancelledAt is the operational equivalent that maps from ISN's deleteddatetime per platform issue #9. RLS: business-scoped at DB layer.
+// Scalability:   PARTITION CANDIDATE on (business_id, scheduled_at) yearly per spec 07 Sc4. Not partitioned today. Indexes: (business_id, status, scheduled_at), (business_id, lead_inspector_id, scheduled_at), (business_id, customer_id, scheduled_at desc), (business_id, property_id, scheduled_at desc), (status), unique (isn_source_id where not null). Expected row count at 10x: ~60,000/year per business sustained, ~600,000 cumulative across 10 years. Hot path: dispatcher dashboard, inspector daily view (spec 07 Sc5).
+// Multi-business: SCOPED. The pattern other ops tables (pool_jobs, pest_treatments) mirror per spec 08 M2.
 export const inspections = pgTable("inspections", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "restrict" }),
@@ -592,6 +682,10 @@ export const inspections = pgTable("inspections", {
 }));
 
 // Multi-inspector orders. One row per assigned inspector beyond the lead.
+// Table: inspection_inspectors
+// Security:      No PII. RLS: business-scoped via inspections FK.
+// Scalability:   PK composite (inspection_id, inspector_id). Expected row count at 10x: ~5% of inspections × 1-2 secondary inspectors = ~6,000.
+// Multi-business: SCOPED via parent inspections.
 export const inspectionInspectors = pgTable("inspection_inspectors", {
   inspectionId: uuid("inspection_id").notNull().references(() => inspections.id, { onDelete: "cascade" }),
   inspectorId: uuid("inspector_id").notNull().references(() => users.id),
@@ -603,6 +697,10 @@ export const inspectionInspectors = pgTable("inspection_inspectors", {
 }));
 
 // Inspection participants (realtors, TC, etc. on this specific inspection)
+// Table: inspection_participants
+// Security:      No direct PII (links transaction_participants which carry PII). RLS: business-scoped via inspections FK.
+// Scalability:   PK composite (inspection_id, participant_id, role_in_transaction). Indexes on (participant_id), (role_in_transaction). Expected row count at 10x: ~120,000 (60K inspections × ~2 participants each).
+// Multi-business: SCOPED via parent inspections. The same transaction_participant can appear on inspection_participants for one business AND on a future pool_job_participants for another, since transaction_participants is shared.
 export const inspectionParticipants = pgTable("inspection_participants", {
   inspectionId: uuid("inspection_id").notNull().references(() => inspections.id, { onDelete: "cascade" }),
   participantId: uuid("participant_id").notNull().references(() => transactionParticipants.id, { onDelete: "restrict" }),
@@ -616,6 +714,10 @@ export const inspectionParticipants = pgTable("inspection_participants", {
 }));
 
 // Inspection service line items
+// Table: inspection_services
+// Security:      No PII. RLS: business-scoped via inspections FK.
+// Scalability:   Indexes on (inspection_id). Expected row count at 10x: ~120,000 (60K inspections × ~2 line items).
+// Multi-business: SCOPED via parent inspections.
 export const inspectionServices = pgTable("inspection_services", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   inspectionId: uuid("inspection_id").notNull().references(() => inspections.id, { onDelete: "cascade" }),
@@ -629,6 +731,10 @@ export const inspectionServices = pgTable("inspection_services", {
 }));
 
 // Reschedule history (D3: scheduled_at-based)
+// Table: reschedule_history
+// Security:      No direct PII. RLS: business-scoped via inspections FK.
+// Scalability:   Index on (inspection_id). Expected row count at 10x: ~6,000/year (10% of inspections reschedule once).
+// Multi-business: SCOPED via parent inspections. Open question (spec 08 #1): polymorphic across operational types vs per-op tables. Deferred.
 export const rescheduleHistory = pgTable("reschedule_history", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   inspectionId: uuid("inspection_id").notNull().references(() => inspections.id, { onDelete: "cascade" }),
@@ -646,6 +752,10 @@ export const rescheduleHistory = pgTable("reschedule_history", {
 // =============================================================================
 // audit_log (gains business_id for scoped queries)
 // =============================================================================
+// Table: audit_log
+// Security:      Contains references to entities and JSON blobs of changes. No direct PII column-by-column, but `changes` jsonb can hold PII snapshots (before/after). Encryption candidate for `changes` payload. Soft-delete: NO. Audit log is append-only. Hard delete only by data-retention job after a configured retention window. RLS: business-scoped on read via business_id (null business_id = system events, owner-only).
+// Scalability:   PARTITION CANDIDATE on (business_id, created_at) quarterly per spec 07 Sc4. Highest-write table in the system. Indexes: (entity_type, entity_id), (user_id), (business_id), (created_at). Expected row count at 10x: ~2.4M/year per business at full audit posture (writes + reads of sensitive fields per S5).
+// Multi-business: SCOPED on business_id (nullable for system-level events that span businesses). New businesses get their own log entries in the same table; partitioning later separates them physically.
 export const auditLog = pgTable("audit_log", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   businessId: uuid("business_id").references(() => businesses.id),    // null for cross-business / account-level events
