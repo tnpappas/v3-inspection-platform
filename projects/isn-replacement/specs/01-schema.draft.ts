@@ -759,6 +759,22 @@ export const inspectorServiceDurations = pgTable("inspector_service_durations", 
 export const inspections = pgTable("inspections", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "restrict" }),
+
+  // Order number, unique within business.
+  // Format: ${businessPrefix}-${currentYear}-${seq:06d}
+  // Example: "SH-2026-001234", "HCJ-2026-000045".
+  // Generation: a Postgres sequence per business (e.g., order_number_seq_safehouse,
+  //   order_number_seq_hcj_pools). Application code calls nextval() and formats
+  //   the result with the business prefix and the current year. The sequence
+  //   is monotonic across years; year rollover requires no maintenance job.
+  // Race-free guarantee: nextval() is atomic in Postgres. Concurrent inserts
+  //   never collide.
+  // Padding: six digits handles 999,999 per business lifetime. Expand later
+  //   trivially by widening the format string.
+  // Migration: legacy ISN orderNumber preserved verbatim where it follows our
+  //   format; otherwise stored in isnReportNumber and a fresh order number is
+  //   generated for the migrated row.
+  // See 01-schema-rationale.draft.md for full strategy notes.
   orderNumber: varchar("order_number", { length: 50 }).notNull(),    // unique within business via index below
 
   // Source tracking
@@ -769,10 +785,24 @@ export const inspections = pgTable("inspections", {
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
   durationMinutes: integer("duration_minutes").notNull().default(180),
 
-  // Lead inspector (multi-inspector via inspection_inspectors junction)
+  // Lead inspector. NULLABLE BY DESIGN. Application logic enforces required-
+  // by-status: cannot transition to confirmed | en_route | in_progress |
+  // completed without a lead. Three workflow cases require nullability:
+  //   1. Booking-before-assignment (client/realtor self-book; dispatcher
+  //      assigns later).
+  //   2. Cross-business inheritance (future pool_jobs / pest_treatments may
+  //      not use a single "lead" concept).
+  //   3. Mid-reschedule clearing before reassignment.
+  // Multi-inspector via inspection_inspectors junction.
   leadInspectorId: uuid("lead_inspector_id").references(() => users.id),
 
-  // Customer and property (shared within account)
+  // Customer and property (shared within account). Both nullable.
+  // - customerId: nullable for migration tolerance (legacy ISN orders may not
+  //   link cleanly). Application logic enforces required-by-status: cannot
+  //   transition to in_progress | completed without customerId.
+  // - propertyId: same migration tolerance, plus a real workflow case
+  //   (booking taken before property fully captured; property attaches before
+  //   inspection day). Same status enforcement as customerId.
   customerId: uuid("customer_id").references(() => customers.id),
   propertyId: uuid("property_id").references(() => properties.id),
 

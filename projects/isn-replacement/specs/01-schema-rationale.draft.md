@@ -46,6 +46,57 @@ Tables that explicitly do NOT soft-delete:
 - `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
 - `audit_log`: append-only by design. Hard delete only via configured retention job.
 
+## Inspections table conventions (review pass 2026-04-27)
+
+### leadInspectorId is nullable by design
+
+Three real workflow cases require nullability:
+
+1. **Booking-before-assignment.** Client or realtor self-books via portal; inspection lands in `status='scheduled'` without an inspector. Dispatcher assigns later.
+2. **Cross-business inheritance.** When this pattern extends to `pool_jobs` and `pest_treatments`, those workflows may not use a single "lead" concept.
+3. **Reassignment during reschedule.** A job's inspector can be cleared mid-reschedule, then reassigned in a separate step.
+
+Application logic enforces required-by-status: cannot transition to `confirmed | en_route | in_progress | completed` without a lead. Inspector reassignment goes through `reschedule_history`.
+
+### customerId and propertyId are nullable
+
+- `customerId`: nullable for migration tolerance. Legacy ISN orders may not link cleanly to a customer record (test orders, voided orders, data hygiene gaps). Easier to import with null than to drop or fabricate. New bookings should require a customer.
+- `propertyId`: same migration tolerance reason, plus one real workflow: pre-property bookings (e.g., realtor calls in with "client just made an offer, address coming" and we want to hold the slot). Property attaches before inspection day.
+
+Application logic enforces required-by-status: cannot transition to `in_progress | completed` without both. The migration plan documents the population gap and the cleanup pass that backfills wherever ISN data permits.
+
+### Order number generation
+
+**Format:** `${businessPrefix}-${currentYear}-${seq:06d}`. Example: `SH-2026-001234`, `HCJ-2026-000045`.
+
+**Generation strategy:**
+
+- A Postgres `SEQUENCE` per business: `order_number_seq_safehouse`, `order_number_seq_hcj_pools`, etc. Created when the business is created.
+- Application code calls `nextval(seqForBusiness)` and formats the result with the business's prefix and the current year.
+- The sequence is monotonic and increments forever for that business. Year rollover requires no maintenance job; the year is purely a format string.
+- Six-digit padding handles 999,999 per business lifetime. Expand the format trivially when needed.
+
+**Race-free guarantee:** `nextval()` is atomic in Postgres. Concurrent inserts at the same instant get distinct values. No SELECT MAX + 1 anti-pattern.
+
+**Examples over time:**
+
+- Safe House at year 1: `SH-2026-000001`, `SH-2026-000002`, ...
+- Safe House next year: `SH-2027-002413` (sequence keeps incrementing).
+- Safe House decades on: `SH-2050-728432` (acceptable; six digits accommodate up to 999,999).
+
+**Year-prefixed query:** `WHERE order_number LIKE 'SH-2026-%'` still works for "all 2026 Safe House inspections" reports.
+
+**Migration:** legacy ISN order numbers preserved in `isnReportNumber` if they do not match our format. A fresh `order_number` is generated for each migrated row. The original ISN identifier remains queryable.
+
+### rescheduleCount removed
+
+Denormalized counter columns drift over time as edge-case writes miss the increment. Reschedule count is computed on demand from `reschedule_history` via `COUNT()`. The `(inspection_id)` index on reschedule_history makes the join cheap.
+
+### confirmedAt / initialCompletedAt have corresponding *By columns
+
+- `confirmedBy` is the user who recorded the confirmation. Null when the client self-confirmed via the portal (in which case the audit trail in `audit_log` carries the participant info).
+- `initialCompletedBy` is the user who marked the first completion, typically the lead inspector. Distinct from `createdBy` of any later QA-reopen-and-recomplete cycle.
+
 ## Bill-to-closing workflow (known Safe House pattern)
 
 Captured 2026-04-27 from review pass. Not implemented in the scheduling slice; surfaced now so the migration plan and the future payments slice account for it.
