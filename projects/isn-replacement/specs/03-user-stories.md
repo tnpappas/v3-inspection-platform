@@ -1,6 +1,6 @@
 # User Stories and Workflows
 
-_Status: DRAFT, awaiting Troy's review. Companion to `specs/01-schema.ts` (locked) and `specs/04-field-mapping.md` (locked)._
+_Status: LOCKED 2026-04-27. Companion to `specs/01-schema.ts` (locked v3.1) and `specs/04-field-mapping.md` (locked). Subsequent updates land additively; the open-questions section tracks unresolved items that surfaced during the spec pass._
 
 This spec defines the scheduling slice from the perspective of each user role. It drives the API contract (spec 02) and the UI specifications. Stories are written in the standard "As a [role], I want to..., so that..." form with explicit acceptance criteria. Workflows are captured as Mermaid diagrams.
 

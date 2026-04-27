@@ -194,9 +194,178 @@ Every table in `specs/01-schema.ts` carries a header comment confirming evaluati
 
 Tables that touch PII reference back to this spec. The security review is then "is this annotation correct" rather than "did we think about this."
 
+### S11. Permission model (two-tier RBAC with overrides)
+
+Added 2026-04-27 alongside schema v3.1. The system uses two-tier role-based access control: granular permissions checked at request time, plus permission groups for operational ergonomics. Per-user grants and denies override role defaults. Resolution happens at session start.
+
+#### Building blocks
+
+- **Granular permissions** (table `permissions`): the atomic capabilities checked at request time. 50 entries today (`view.customer.pii`, `edit.inspection.assign`, `manage.billing`, etc.). System-managed reference table; seeded from a TypeScript constant via migration.
+- **Permission groups** (table `permission_groups`): bundles of granular permissions for ergonomics. 9 entries today (`admin`, `account_admin`, `view`, `view_pii`, `financial`, `customer_data`, `operational`, `audit`, `export`). Flat structure (no nesting). System-managed.
+- **Group membership** (table `permission_group_members`): junction (group_key, permission_key). System-managed.
+- **Role defaults** (table `role_permissions`): per-account configuration of what each role gets by default. New accounts seed with sensible defaults; owner can adjust via `manage.account_config`.
+- **Per-user overrides** (table `user_permission_overrides`): grants and denies per (user, business). Optional `expiresAt` for time-limited overrides matching the `user_roles` expiration pattern.
+
+#### Resolution algorithm
+
+```
+effectivePermissions(user, business):
+  let perms = empty set
+
+  // Step 1: union of role defaults, expanding groups
+  for each role in user_roles(user, business):
+    for each row in role_permissions(account, role):
+      if row.permission_key:
+        perms.add(row.permission_key)
+      else if row.group_key:
+        perms.add_all(group_members(row.group_key))
+
+  // Step 2: per-user grants (add), expanding groups
+  for each row in user_permission_overrides(user, business, effect='grant', not expired):
+    if row.permission_key:
+      perms.add(row.permission_key)
+    else if row.group_key:
+      perms.add_all(group_members(row.group_key))
+
+  // Step 3: per-user denies (subtract), expanding groups
+  // Denies always win; granular deny removes a group-granted permission.
+  for each row in user_permission_overrides(user, business, effect='deny', not expired):
+    if row.permission_key:
+      perms.remove(row.permission_key)
+    else if row.group_key:
+      perms.remove_all(group_members(row.group_key))
+
+  return perms
+```
+
+**Key properties:**
+
+- Groups expand at resolution time, not at storage time. Storage stays normalized.
+- Granular denies always win over group grants. "Bob has admin group but is denied view.customer.pii" results in admin minus that one permission.
+- Group denies expand to granular denies. "Deny export group" removes all `export.*` permissions.
+- Computed once per session at login or at session refresh; cached in the request context.
+
+#### Cache invalidation
+
+The effective permissions cache invalidates when:
+
+- A user's `user_roles` rows change (insert, delete, expire).
+- The user's `user_permission_overrides` rows change.
+- A `role_permissions` row changes for a role the user holds.
+- A `permission_group_members` row changes for a group the user has been granted.
+- The user's `accountId` or active business changes.
+
+Cache TTL is set to session lifetime; explicit invalidation events listed above force a refresh on next request. Affected users see permission changes immediately on next request, no logout required.
+
+#### Sensitive permissions and groups
+
+A permission is `sensitive` when its use requires extra audit. Examples: `view.customer.pii`, `manage.billing`, all `export.*`, all `delete.*`, all `override.*`, `manage.account_config`, `manage.account`.
+
+A group is `sensitive` when ANY contained permission is sensitive. Cached on `permission_groups.sensitive`; recomputed by the migration that mutates `permission_group_members`.
+
+**Maintenance contract:** the migration helper `recomputePermissionGroupSensitivity(groupKey)` is called whenever `permission_group_members` is mutated for that group. The schema does not enforce this via trigger; it is the migration author's responsibility. A test asserts that for every group, `sensitive` matches the OR of contained permissions' `sensitive` flags. CI runs this test on every commit.
+
+**Sensitive grant/use enforcement:**
+
+- Granting a sensitive permission or group requires MFA re-verification when `accounts.config.security.requireMfaForPermissionGrants=true`.
+- Sensitive grants produce `audit_log` entries with elevated retention (forever, not subject to standard retention).
+- Use of sensitive permissions also triggers `audit_log` entries with `action='read_sensitive'` for read operations or the appropriate write `action` for mutations.
+- The `audit_log.metadata` payload on a grant captures the expansion at grant time as `metadata.expanded_to`. This preserves what the grant meant historically, even if the group composition changes later.
+
+#### Audit log entries for permission changes
+
+New entity types: `permission`, `permission_group`, `permission_group_member`, `role_permission`, `user_permission_override`. The most-touched is `user_permission_override`.
+
+**Granting a group:**
+
+```
+action: 'create'
+entity_type: 'user_permission_override'
+entity_id: <override pk>
+changes: {
+  after: {
+    user_id: '<UUID>', business_id: '<UUID>', group_key: 'admin',
+    effect: 'grant', reason: 'transition to leadership'
+  },
+  metadata: {
+    expanded_to: ['manage.user', 'manage.user.roles', ...]  // captured at grant time
+  }
+}
+```
+
+**Granting/denying a granular permission:** same shape, `permission_key` populated, `group_key` null, no `expanded_to` in metadata.
+
+**System-level catalog mutation (adding a permission to a group):**
+
+```
+action: 'create'
+entity_type: 'permission_group_member'
+changes: {
+  after: { group_key: 'admin', permission_key: 'manage.new_thing' },
+  metadata: {
+    context: 'migration',
+    migration_id: '...',
+    affects_users: <count of users with this group granted>
+  }
+}
+```
+
+This migration event is logged at the system level (no business_id, no account_id) because it affects all accounts.
+
+#### admin / account_admin maintenance pattern
+
+`account_admin` is a flat superset of `admin`: it contains every permission `admin` contains, plus additional account-level permissions (`manage.account_config`, `manage.account`, `manage.business`).
+
+**Maintenance rule:** when adding a permission to `admin`, also add it to `account_admin`. The schema does not enforce this; a test or migration script asserts the invariant. Drift between the two is a bug.
+
+If this drift becomes operationally common, we revisit by introducing nested groups (deferred design choice; rejected today for resolution-algorithm simplicity).
+
+#### Scope vs permission distinction
+
+**Permissions express what a user can do. Scope expresses what entities the user can act on. Scope is enforced in application logic, not in the permission catalog.**
+
+Example: a technician has `view.customer.pii` granted via the operational group, but scope-enforced in code to only inspections where the technician is lead or secondary. The permission table cannot express "for own work only"; that's an application concern.
+
+Do not add scope-permission combinations to the permissions catalog (e.g., do not add `view.customer.pii.own_inspections` as a separate permission). The catalog stays clean; scope rules live alongside the permission check in the application layer.
+
+#### PII masking pattern (runtime API behavior)
+
+**Storage:** PII columns are stored unredacted in the database. PII redaction is applied in the API serialization layer based on the requesting user's effective permissions.
+
+**Behavior:**
+
+- Permission `view.customer.pii` (or membership in a group containing it, like `customer_data` or `view_pii`) bypasses redaction.
+- Otherwise, PII fields are returned as masked strings in API responses.
+
+**Redaction conventions:**
+
+- Email: `j****@example.com` (first character + asterisks + domain).
+- Phone: `***-***-1234` (last 4 digits visible).
+- Address: `*** Main St` for street; city/state/zip visible (zip is geographic, not personally identifying alone).
+- Name: full name visible by default (the `view.customer.pii` permission is about contact details, not identity). If a future requirement demands name-masking, the permission `view.customer.name` becomes a separate gate.
+- License (`PII: government_id`): masked entirely (`***-***-****`) when the user lacks `view.customer.pii`.
+- Notes (free text): redacted entirely (`[redacted]`) when the user lacks `view.customer.pii`, since notes can contain unstructured PII.
+
+**Why runtime, not field-level encryption:**
+
+Field-level encryption was considered (S3) but is deferred. Runtime masking is sufficient for the threat model: an authenticated user with the right permissions sees PII; an authenticated user without those permissions does not. Database-layer attackers (compromised DB credentials, leaked backup) are addressed by S3 once we lock the encryption strategy.
+
+**Implementation note:** the API serialization layer (likely a middleware or a Drizzle query helper) applies redaction. The application MUST NOT manually unredact PII based on partial logic; it goes through the centralized helper. A test asserts that a user without `view.customer.pii` cannot retrieve unmasked PII through any API path.
+
+This pattern is operationally significant because it means **future developers should not implement field-level encryption thinking it is required**. Encryption is one approach; runtime masking is what we use today.
+
+#### Permission denial UX
+
+When a user attempts an action without the required permission:
+
+1. UI elements are hidden or disabled at render time. Users do not see buttons they cannot click.
+2. If a user reaches an action endpoint via direct URL or API call without the permission, the API responds with HTTP 403 plus a structured error: `{ "error": "permission_denied", "required": ["manage.billing"], "missing": ["manage.billing"] }`.
+3. The denial produces an `audit_log` entry with `action=<intended action>`, `outcome='denied'`, `metadata.required_permissions=[...]`. This catches probe attempts.
+4. Three or more denials within 1 minute from the same session trigger an alert to the account owner; configurable per `accounts.config.security.permissionDenialAlerts`.
+
 ## Critical invariants enforced at application layer
 
-Documented separately from S1-S10 because these are application-layer enforcement requirements that supplement DB-layer constraints, not policy statements.
+Documented separately from S1-S11 because these are application-layer enforcement requirements that supplement DB-layer constraints, not policy statements.
 
 
 DB-layer constraints handle most isolation. A small number of invariants cannot be expressed as foreign keys or CHECK constraints because the relationship is polymorphic. These are enforced at the application layer; violations are bugs and must be caught by tests and runtime guards.

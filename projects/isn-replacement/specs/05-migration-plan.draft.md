@@ -34,6 +34,58 @@ Both principles apply to every step in this plan and every script in `specs/migr
 
 ## Required classification steps
 
+### Step 0: Seed system-managed reference data and seed account (NEW for v3.1)
+
+Before any data migration runs, the seed migration populates system-managed reference tables and the seed account scaffolding. This step is idempotent (see Sequencing section below) and runs as a regular Drizzle migration on every deploy.
+
+1. **`permissions` table.** Insert all 45 granular permissions from `PERMISSIONS_SEED` constant in `specs/shared/schemas/permissions-seed.ts`. Fields: `key`, `category`, `description`, `sensitive`.
+
+2. **`permission_groups` table.** Insert 9 groups from `PERMISSION_GROUPS_SEED`. Fields: `key`, `name`, `description`, `sensitive` (precomputed; verified by recompute helper after Step 3).
+
+3. **`permission_group_members` table.** Insert all group->permission mappings from `GROUP_MEMBERS_SEED`. After insert, run `recomputePermissionGroupSensitivity()` for each group to verify cached sensitive flags match (per the maintenance contract in `01-schema.ts`).
+
+4. **`accounts` table.** Insert the seed account:
+   - `name`: "Pappas Group" (or final operational name)
+   - `slug`: `pappas` (globally unique)
+   - `plan_tier`: `internal`
+   - `status`: `active`
+   - `billing_*`: populated from operational data
+   - `config`: populated with security and retention overrides per Troy's retroactive decisions:
+     - `security.requireMfaForOwners=true` (override of internal-tier default; production data justifies it)
+     - `audit_retention_days=2555` (7 years per Troy's directive 2026-04-27)
+     - Other defaults from `accountConfigSchema`
+   - `created_by` and `last_modified_by`: NULL (chicken-and-egg; no user exists yet for the seed account)
+
+5. **`businesses` table.** Insert three rows for the seed account:
+   - Safe House Property Inspections (type=`inspection`, slug=`safehouse`, displayOrder=1)
+   - HCJ Pool Services (type=`pool`, slug=`hcj-pools`, displayOrder=2)
+   - Pest Heroes (type=`pest`, slug=`pest-heroes`, displayOrder=3)
+   - `created_by` and `last_modified_by` are non-null FKs to `users`. **For seed:** create a system user first (see Step 5.5) OR use a synthetic `system` user that gets created as part of the seed. Decision: create a system user with `email='system@<account-slug>.local'`, `status='active'`, no password (cannot log in), used only for seed-time author attribution. The system user is created in Step 4.5 below.
+
+5.5. **System user for the seed account.** Create one row in `users` with:
+   - `account_id` = the seed account id
+   - `email` = `system@<account-slug>.local`
+   - `display_name` = `"System (seed)"`
+   - `status` = `active`
+   - `password_hash`, `username`: NULL (cannot log in via password; SSO and login flows reject this user)
+   - `is_system_user`: NEW field considered but rejected; instead the system user is identified by its email pattern (`system@*.local`) and a runtime check rejects login attempts.
+
+   This system user becomes the `created_by` and `last_modified_by` for the seed `businesses` rows and seed `services` rows. It also becomes `granted_by=NULL` reference target where applicable, since `granted_by` is nullable.
+
+6. **`order_number` Postgres sequences.** Create one sequence per business: `order_number_seq_safehouse`, `order_number_seq_hcj_pools`, `order_number_seq_pest_heroes`. Each starts at 1.
+
+7. **`role_permissions` table.** Insert default role-to-permission/group mappings from `DEFAULT_ROLE_PERMISSIONS_SEED`. The seed maps each of the 7 roles (`owner`, `operations_manager`, `dispatcher`, `technician`, `client_success`, `bookkeeper`, `viewer`) to its default groups and individual permissions for the seed account. Future accounts replicate via the same constant.
+
+8. **System-level audit log entry.** Record the seed event in `audit_log`:
+   - `accountId`: seed account id
+   - `businessId`: NULL (account-level event)
+   - `userId`: the system user id (per Step 5.5)
+   - `action`: `create`
+   - `entity_type`: `system`
+   - `metadata.context`: `system_seed`
+   - `metadata.migration_id`: the migration's id
+   - `metadata.seeded_counts`: `{ permissions: N, permission_groups: N, group_members: N, businesses: 3, role_permissions: N }`
+
 ### Step 1: User audit (D5)
 
 Audit all 296 ISN users from `/users`. Per user, decide:
@@ -154,16 +206,29 @@ From Phase 2 pilot's "30% dead surface" finding plus augment's clarification on 
 
 ## Sequencing
 
-1. Stand up empty v2 schema, no data.
-2. Seed `businesses` (Safe House, HCJ, Pest Heroes), `accounts` placeholder, `territories` (one row), `offices` (one row), `services` from ISN ordertypes.
-3. User audit + import (Step 1).
+1. Stand up empty v3.1 schema, no data.
+2. **Step 0: Seed system-managed reference data and seed account/businesses/role_permissions.** (NEW for v3.1; details in Step 0 above.)
+3. User audit + import (Step 1). Including initial `user_roles` rows.
 4. Contact split + import (Step 2).
 5. Property dedupe + import (heuristics from `04-field-mapping.md`).
 6. Order migration (Step 3) with archive CSV.
 7. Custom fields classification (Step 4) baked into Step 6 per-order.
 8. Audit history import (Step 5) per migrated inspection.
 9. Reschedule history reconstruction (Step 6).
-10. Validation pass: row counts match, cancellation rates align with ISN UI counters, sampled orders round-trip equal.
+10. **Permission overrides for known exceptions.** If specific users need overrides on day one, insert `user_permission_overrides` rows after Step 1 user import.
+11. Validation pass: row counts match, cancellation rates align with ISN UI counters, sampled orders round-trip equal, effective permissions for sample users match expected role+override combinations.
+
+### Idempotency note (v3.1)
+
+The seed step (Step 0) MUST be idempotent. Re-running the seed:
+
+- INSERTs new permissions added since last run (ON CONFLICT key DO NOTHING).
+- INSERTs new permission_groups (ON CONFLICT key DO NOTHING).
+- INSERTs new permission_group_members (ON CONFLICT pk DO NOTHING).
+- For `accounts`, `businesses`, `role_permissions`: idempotent on the natural keys (account.slug, business.account_id+slug, role_permissions PK). Re-running does not duplicate or overwrite existing rows.
+- The recompute helper for group sensitivity runs unconditionally; cheap and ensures cache consistency.
+
+Idempotency lets the seed run as a normal Drizzle migration on every deploy, even if some entries already exist.
 
 ## Validation checklist (placeholder)
 

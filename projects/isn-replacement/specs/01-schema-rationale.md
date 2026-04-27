@@ -21,6 +21,108 @@ _Status: LOCKED 2026-04-27 alongside the schema (git tag `v3-schema-locked`). Su
 13. [Per-table rationale stubs](#rationale-per-table)
 14. [Open questions](#open-questions-tracked-here)
 
+## Permission system architecture (v3.1, added 2026-04-27)
+
+The v3.1 schema additions introduced two-tier RBAC: granular permissions checked at request time, plus permission groups for operational ergonomics. Per-user grants and denies override role defaults. This section captures the architectural decisions made during the v3.1 design pass; full operational details in `06-security-spec.md` S11.
+
+### Why two tiers (granular + groups)
+
+Managing 50 permissions per user is operational overhead. Most users need standard bundles ("all admin", "all view", "all financial"). Group permissions handle the common case while granular permissions remain available for precision.
+
+Real-world cases the two-tier model supports:
+
+- Grant `admin` group to a new operations manager: they get all 8 admin permissions in one assignment.
+- Add a new admin capability later: anyone with `admin` automatically gets it (subject to caveat below).
+- Grant `admin` to Bob but deny `view.customer.pii`: Bob has 7 of 8 admin permissions plus 14 of 15 view permissions. The deny is explicit and audited.
+- Revoke `admin` from a departing employee: clean single-row removal.
+
+The alternative we considered and rejected was role hierarchies (`dispatcher_with_export`, `dispatcher_with_billing_view`, etc.). Sub-role proliferation is a worse problem than multiple permissions per user.
+
+### Storage option B-2 (separate tables, separate columns for kind)
+
+Options considered:
+
+- **A: Synthetic rows in `permissions` with `is_group=true`.** Conflates two concepts. Every consuming query needs to filter by `is_group`. Rejected.
+- **B-1: Two tables, single `target_kind` discriminator column.** Slightly more compact, less explicit. Borderline.
+- **B-2: Two tables, two nullable target columns with CHECK constraint enforcing exactly-one.** Chosen. Each FK enforced independently; audit log payload distinguishes cleanly between permission and group references; PK can include both columns since CHECK guarantees one is null.
+- **C: Hierarchical naming with wildcards (`admin.*`).** Implicit grouping; runtime string-matching changes group membership when permissions are added; bad for audit. Rejected.
+
+B-2 chosen because explicit beats implicit for security-critical data. Two extra reference tables (`permission_groups`, `permission_group_members`) cost almost nothing and produce a cleaner audit trail.
+
+### No nested groups
+
+Groups contain granular permissions only, never other groups. Considered and rejected for v3.1.
+
+Reasons:
+
+- Resolution algorithm complexity grows non-linearly with nesting depth.
+- Audit trail ambiguity ("granted via admin, which is in account_admin, which is..." obscures the actual grant).
+- Operational simplicity: a user-facing UI showing "this group contains: A, B, C" is straightforward; "this group contains group X (which contains A, B, C) plus group Y (which contains C, D, E with overlap)" is not.
+
+The trade-off lands on `account_admin`: it is a flat superset of `admin` rather than a parent. Documented maintenance rule: "when adding a permission to admin, also add to account_admin." A test enforces the invariant. If maintenance friction proves operationally common, revisit.
+
+### Granular denies always win over group grants
+
+Resolution applies grants then denies. A granular `deny view.customer.pii` removes the permission even if the user has a group grant that would otherwise include it.
+
+**Why:** "specific overrides general" is the principle developers expect. Surprises here become audit holes ("I thought Bob couldn't see PII because we denied it" turns into "the group grant added it back").
+
+Group denies expand to granular denies at resolution time. "Deny export group" is equivalent to denying every `export.*` permission individually.
+
+### Coarse-grained permissions, not fine-grained
+
+50 permissions is the catalog target. Examples: `view.inspection`, `edit.inspection.assign`, `export.customer_list`, `manage.user.permissions`.
+
+The alternative was fine-grained (`view.inspection.status`, `view.inspection.notes`, `view.inspection.payment_status`, hundreds of permissions). Fine-grained gives more flexibility but explodes management overhead and audit log complexity.
+
+Coarse-grained handles the real cases (Katie blocked from PII, Bob granted export rights) without exploding the catalog. Specific-action permissions (`view.pii`, `export.customer_list`, `manage.billing`, etc.) are called out separately for sensitivity tagging.
+
+### Account-shared permissions, account-scoped role defaults
+
+The `permissions` table is account-shared (system-managed reference data). The set of capabilities the codebase checks is a product-level concern, not a per-account customization.
+
+The `role_permissions` table is account-scoped: each account configures which roles get which permissions/groups by default. New accounts seed with the standard role mapping; owner adjusts via `manage.account_config`.
+
+This split lets future licensees configure their own role defaults (a licensee where `dispatcher` should have export rights configures it once, no code change) while the underlying capability list stays consistent.
+
+### Sensitivity flag computed and cached on groups
+
+A group's `sensitive` flag is the OR of contained permissions' `sensitive` flags. The cache lives on `permission_groups.sensitive`; recomputed by application code in the migration that mutates `permission_group_members`.
+
+Why cached: avoid a query-time JOIN every time we check whether a group is sensitive (which happens at every grant operation in the UI flow).
+
+Why not enforced via DB trigger: the catalog mutates only via migrations, which run once. A trigger would add complexity for a narrow benefit. The maintenance contract (a comment block on the column plus a CI test) is sufficient.
+
+### Per-user override expiration
+
+`user_permission_overrides.expiresAt timestamptz nullable` matches the `user_roles.expiresAt` pattern. NULL means permanent. Populated means automatic revocation by an hourly sweep job.
+
+Real-world use: temporary grants (vacation coverage, project-based access) auto-revoke without manual cleanup.
+
+Partial index `user_permission_overrides_expires_idx WHERE expires_at IS NOT NULL` keeps the sweep job query cheap.
+
+### Effective permissions computed at session start, not materialized
+
+We considered a `user_effective_permissions` materialized view or denormalized table. Rejected.
+
+Reasons:
+
+- Cache staleness becomes a permission bug. Stale permissions either grant access that should be revoked (security hole) or deny access that should be granted (UX problem).
+- Recomputing at session start is cheap (a few indexed lookups; the resolution algorithm is read-only and simple).
+- Cache invalidation events are well-defined (role changes, override changes, group membership changes); the in-memory request-context cache handles the hot path.
+
+Future optimization: if session start latency becomes a problem, pre-compute and cache in Redis with explicit invalidation hooks. Not needed at v3.1 scale.
+
+### Composite PK with nullable target columns
+
+`role_permissions` and `user_permission_overrides` use composite primary keys where two columns (`permission_key`, `group_key`) are nullable, with a CHECK constraint guaranteeing exactly one is non-null per row.
+
+This is a deliberate design pattern, not a mistake. Postgres allows nulls in composite PKs as long as no two rows have identical values across the column set. The CHECK constraint guarantees that two rows differ on at least one of the target columns. The PK distinguishes `(account, role, permission_key=X, group_key=null)` from `(account, role, permission_key=null, group_key=Y)` cleanly.
+
+Alternative considered: a synthetic `id uuid` PK. Rejected because composite PK gives natural uniqueness on the actual identifying tuple and avoids a separate index.
+
+Documented as a comment block on both tables for future developer onboarding.
+
 ## Migration design principles (added 2026-04-27 during spec 04 lock)
 
 Two patterns surfaced during the field-mapping spec that apply broadly to any future migration work in this codebase. Captured as principles so they propagate.
