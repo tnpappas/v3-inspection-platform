@@ -1,4 +1,33 @@
 /**
+ * 01-schema.v2.draft.ts.superseded
+ *
+ * STATUS: SUPERSEDED on 2026-04-27 by the licensing-readiness architecture (v3).
+ * Do not import. Do not migrate. Kept as design history only.
+ *
+ * What changed in v3 (see specs/01-schema.draft.ts):
+ * - Added `accounts` table as the top-level licensing tenant. Single seed row today.
+ * - `account_id` FK added to: businesses, users, customers, properties, agencies,
+ *   transaction_participants, audit_log. Operational tables inherit account scope
+ *   through their FK chain (no denormalized account_id on those).
+ * - Pattern 1 user model: a user belongs to exactly one account.
+ * - Slug uniqueness: `accounts.slug` global, `businesses.slug` scoped to (account_id, slug).
+ * - RLS at the database layer enforces account isolation per security spec S9.
+ * - Composite hot-path indexes lead with `account_id`.
+ * - Enum-shaped columns converted to `pgEnum` for DB-layer enforcement.
+ * - 5 businesses-table refinements applied schema-wide:
+ *   1. Enum/CHECK constraints on enum columns
+ *   2. created_by / last_modified_by on tables that change rarely
+ *   3. (account_id, slug) uniqueness on businesses
+ *   4. Zod config schemas in shared/schemas/business-config.ts and account-config.ts
+ *   5. display_order on businesses for UI affordance
+ *
+ * Why: per Troy's directive 2026-04-27 12:53 UTC, the rebuild is licensing-ready
+ * from the foundation, not Safe-House-only with a future retrofit. See:
+ *   ../decisions/2026-04-26-multi-business-architecture.md (account-readiness layer)
+ *   ../specs/06-security-spec.md S9
+ *
+ * Original v2 header below.
+ *
  * 01-schema.draft.ts (v2, multi-business)
  *
  * STATUS: DRAFT, awaiting Troy's review. Do not import. Do not migrate.
