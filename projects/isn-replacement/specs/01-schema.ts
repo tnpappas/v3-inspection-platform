@@ -204,6 +204,19 @@ export const permissionEffectEnum = pgEnum("permission_effect", [
   "deny",
 ]);
 
+// Sentinel timestamp for on_hold inspections.
+// When inspection.status='on_hold' and no real scheduled_at is locked yet,
+// inspection.scheduledAt is set to this value. Operationally significant:
+// - Far-future, so it never collides with realistic scheduling filters
+//   (e.g., "WHERE scheduled_at < now() + interval '5 years'" excludes on_hold).
+// - Stable across decades; not relative to "now".
+// - Sorts predictably (bottom of ASC, top of DESC).
+// - Postgres timestamptz accepts it; max is year 294276.
+//
+// Application code that surfaces a date to users should detect this sentinel
+// and render "Pending Schedule" or similar, NOT a literal year-9999 date.
+export const ON_HOLD_PLACEHOLDER_AT = new Date("9999-12-31T23:59:59.000Z");
+
 // Canonical entity_type values for audit_log. Keep in sync with the application's
 // constants. Adding a value here is a one-line code change; adding a value to a
 // pgEnum requires a DB migration. The CHECK constraint on audit_log.entity_type

@@ -879,7 +879,18 @@ stateDiagram-v2
 - Transition out of `on_hold` requires either locking a date (transitions to `scheduled`) or cancelling.
 - An inspection cannot transition from `on_hold` directly to `confirmed`, `en_route`, `in_progress`, or `completed`. The date must lock first.
 - If a customer or realtor confirms an inspection while it is `on_hold`, the confirmation is accepted but the status stays `on_hold` until a date is locked. The `confirmedAt` timestamp populates regardless.
-- `scheduledAt` for `on_hold` inspections is set to a placeholder far-future timestamp per the schema rationale convention; final convention captured in `04-field-mapping.md`.
+
+**`on_hold` placeholder timestamp convention:**
+
+- `inspections.scheduledAt` for `on_hold` inspections is set to **`9999-12-31 23:59:59 UTC`**. Exposed in code as the `ON_HOLD_PLACEHOLDER_AT` constant in `01-schema.ts`.
+- Why this value: far-future stability (never relative to `now()`), no collision with realistic scheduling filters, predictable sort order (bottom of ASC, top of DESC), avoids Postgres `'infinity'` driver inconsistencies.
+- Operational consequences for queries:
+  - `WHERE scheduled_at BETWEEN now() AND now() + interval '14 days'` correctly excludes on_hold inspections.
+  - `ORDER BY scheduled_at ASC LIMIT 50` puts on_hold rows at the end (typically off the page).
+  - Reports filtering by date range exclude on_hold rows automatically.
+  - Dispatcher "Pending Schedule" section explicitly queries `WHERE status='on_hold'` (not by date).
+- UI rendering: application code detects the sentinel and renders "Pending Schedule" or "Date TBD," NOT a literal year-9999 date. The serialization layer in API responses should also detect and translate.
+- Migration: ISN orders with `osorder=yes` AND no `osscheduleddatetime` set may map to `on_hold` if their `datetime` is also missing or far-past. Migration plan addresses this case explicitly.
 
 ### W7. Bill-to-closing payment
 
