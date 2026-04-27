@@ -99,7 +99,7 @@ The headroom targets in `decisions/2026-04-26-design-decisions.md` D5 (50 inspec
 
 ## Cross-references
 
-- `specs/01-schema.draft.ts` (new v2 draft, this directive's output)
+- `specs/01-schema.ts` (new v2 draft, this directive's output)
 - `specs/01-schema.v1.draft.ts.superseded` (preserved v1 for design history)
 - `decisions/2026-04-26-design-decisions.md` (D1, D2, D3, D4, D5 carry forward)
 - `discovery/05-phase2-plan.md` (Phase 2 paused; resumes after schema review)

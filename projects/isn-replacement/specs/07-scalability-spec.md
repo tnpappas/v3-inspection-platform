@@ -187,7 +187,7 @@ Within a single HTTP request, repeat lookups of the same user/business/role are 
 
 ## Schema-level checklist (per-table)
 
-Every table in `specs/01-schema.draft.ts` carries a header comment confirming evaluation:
+Every table in `specs/01-schema.ts` carries a header comment confirming evaluation:
 
 ```
 // Scalability: [partition key | none], [hot indexes], [expected row count at 10x]

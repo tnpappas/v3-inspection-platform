@@ -164,7 +164,7 @@ This is the test the architecture must pass. If at any point during the schema r
 
 ## Schema-level checklist (per-table)
 
-Every table in `specs/01-schema.draft.ts` carries a header comment confirming evaluation:
+Every table in `specs/01-schema.ts` carries a header comment confirming evaluation:
 
 ```
 // Multi-business: [shared | scoped | junction], [how it adapts when a new business is added]

@@ -1,6 +1,6 @@
 # Schema Rationale (v2 Draft)
 
-_Companion to `specs/01-schema.draft.ts`. Captures design reasoning, ISN deviations, and decisions awaiting Phase 2/3 validation._
+_Companion to `specs/01-schema.ts`. Captures design reasoning, ISN deviations, and decisions awaiting Phase 2/3 validation._
 
 _Status: DRAFT, in progress. Sections fill in as Phase 2 results land and Troy reviews._
 

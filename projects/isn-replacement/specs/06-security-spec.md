@@ -133,7 +133,7 @@ Exception: account-level owner roles (a future concept tied to the deferred `acc
 
 ## Schema-level checklist (per-table)
 
-Every table in `specs/01-schema.draft.ts` carries a header comment confirming evaluation:
+Every table in `specs/01-schema.ts` carries a header comment confirming evaluation:
 
 ```
 // Security: [PII fields | none], [encryption notes], [soft-delete: yes/no], [RLS: business-scoped | shared | system]

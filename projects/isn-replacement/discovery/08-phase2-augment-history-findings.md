@@ -139,7 +139,7 @@ History events return `when` in `-07:00` (Pacific). Confirms Phase 0 finding. **
 
 ## Schema delta updates
 
-Already in `01-schema-rationale.draft.md`, but adding nuance from augment:
+Already in `01-schema-rationale.md`, but adding nuance from augment:
 
 ### Update to migration helper requirements
 

@@ -201,4 +201,4 @@ The pilot already gave us 80% of the field shape. **A full 30-order Block B is n
 
 ## Review format reminder
 
-Per Troy's earlier message: schema review is **inline markup**. When you start the schema review, add `// REVIEW(troy):` comments to `specs/01-schema.draft.ts` and I will respond with `// HATCH:` replies under each.
+Per Troy's earlier message: schema review is **inline markup**. When you start the schema review, add `// REVIEW(troy):` comments to `specs/01-schema.ts` and I will respond with `// HATCH:` replies under each.

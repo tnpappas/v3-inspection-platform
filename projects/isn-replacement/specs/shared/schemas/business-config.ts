@@ -5,7 +5,7 @@
  * `shared/` pattern. `.passthrough()` allows additive evolution without breaking
  * existing rows.
  *
- * Imported by `01-schema.draft.ts` for type-checking and by API routes that
+ * Imported by `01-schema.ts` for type-checking and by API routes that
  * mutate `businesses.config`.
  */
 

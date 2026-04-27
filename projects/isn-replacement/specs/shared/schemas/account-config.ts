@@ -8,7 +8,7 @@
  * additional keys without rejection. New config entries land in callers first
  * and get codified here over time.
  *
- * Imported by `01-schema.draft.ts` for type-checking on read paths and by API
+ * Imported by `01-schema.ts` for type-checking on read paths and by API
  * routes that mutate `accounts.config`.
  */
 

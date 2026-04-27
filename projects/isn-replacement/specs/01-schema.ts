@@ -1,5 +1,5 @@
 /**
- * 01-schema.draft.ts (v3, licensing-ready)
+ * 01-schema.ts (v3, licensing-ready)
  *
  * STATUS: DRAFT, awaiting Troy's review. Do not import. Do not migrate.
  *
@@ -25,7 +25,7 @@
  * - Architecture decision:   ../decisions/2026-04-26-multi-business-architecture.md
  * - Phase 2 pilot findings:  ../discovery/07-phase2-pilot-findings.md
  * - Phase 2 augment+history: ../discovery/08-phase2-augment-history-findings.md
- * - Schema rationale draft:  ./01-schema-rationale.draft.md
+ * - Schema rationale draft:  ./01-schema-rationale.md
  *
  * Conventions:
  * - All TS strict.
@@ -55,7 +55,7 @@
  * Enum convention (per Troy's directive 2026-04-27 12:53 UTC):
  * - Every enum-shaped column is declared as a `pgEnum` for DB-layer enforcement.
  * - Adding new enum values requires a migration (`ALTER TYPE ... ADD VALUE`).
- *   Trade-off documented in 01-schema-rationale.draft.md.
+ *   Trade-off documented in 01-schema-rationale.md.
  *
  * Audit columns convention:
  * - `created_by` and `last_modified_by` (uuid references users.id) on tables that
@@ -987,7 +987,7 @@ export const inspections = pgTable("inspections", {
   // Migration: legacy ISN orderNumber preserved verbatim where it follows our
   //   format; otherwise stored in isnReportNumber and a fresh order number is
   //   generated for the migrated row.
-  // See 01-schema-rationale.draft.md for full strategy notes.
+  // See 01-schema-rationale.md for full strategy notes.
   orderNumber: varchar("order_number", { length: 50 }).notNull(),    // unique within business via index below
 
   // Source tracking

@@ -11,7 +11,7 @@ _Drafted 2026-04-26. Block A executed 2026-04-26 21:15 UTC. Block B and Block C 
 - `/orders/footprints?all=true` returned an empty array, not a useful cross-inspector view.
 - Stub records cannot be stratified directly. Sampling needs detail calls first.
 
-**Architecture pivot, also 2026-04-26 21:48 UTC.** Multi-business Pattern B accepted. The Phase 2 results doc, when written, must map ISN's order/client/agent shapes into the new multi-business schema (`specs/01-schema.draft.ts` v2), specifically:
+**Architecture pivot, also 2026-04-26 21:48 UTC.** Multi-business Pattern B accepted. The Phase 2 results doc, when written, must map ISN's order/client/agent shapes into the new multi-business schema (`specs/01-schema.ts` v2), specifically:
 
 - ISN `client` -> `customers` (shared, no business_id) + `customer_businesses[business=safehouse]`
 - ISN `agent` -> `transaction_participants` (shared) + `inspection_participants` rows on the relevant inspections
