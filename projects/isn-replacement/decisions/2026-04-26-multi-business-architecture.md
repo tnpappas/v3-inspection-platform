@@ -1,3 +1,35 @@
+# Multi-Business Architecture (Pattern B with account layer)
+
+_Decided 2026-04-26 by Troy as Pattern B over the v1 single-business assumption. Updated 2026-04-27 with the licensing-readiness account layer that wraps Pattern B. Schema implementation locked at git tag `v3-schema-locked`._
+
+## Final architecture, three-layer summary (added 2026-04-27)
+
+The rebuild has three layers, each with its own isolation boundary:
+
+1. **Account** (licensing tenant). Top-level. One row today (ours). Future licensees are additional rows. A user belongs to exactly one account (Pattern 1). Cross-account isolation enforced via RLS at the database layer plus INV-1 application-layer invariant.
+
+2. **Business** (operational unit). Within an account. Three rows in our account today: Safe House (inspection), HCJ (pool), Pest Heroes (pest). Each has its own services catalog, technician availability, and operational records (inspections today; pool_jobs and pest_treatments later). Users opt into businesses via `user_businesses` junction; roles are per-business via `user_roles` keyed on (user, business, role).
+
+3. **Customers, properties, transaction participants, agencies** (shared within account). Account-scoped, shared across businesses. Junctions (`customer_businesses`, `property_businesses`, `agency_businesses`) track cross-business activity without duplicating rows. The bill-to-closing workflow uses transaction_participants (lenders and attorneys) as participants on inspections.
+
+The two `decisions/2026-04-26-design-decisions.md` decisions D1 (per-business roles), D2 (pagination), D3 (timestamptz), D5 (sizing as input data) all carry forward and apply within the layered model. D4 (PII scrub) was a one-time event, complete.
+
+## v3 schema state at lock (added 2026-04-27)
+
+- 27 tables, 17 enums, 61 PII column markers, 7 soft-delete tables, 7 tables with direct `account_id`.
+- Two partition candidates declared (audit_log on (account_id, created_at) quarterly; inspections on (business_id, scheduled_at) yearly), implementation deferred until volume warrants.
+- Two critical invariants enforced at application layer (INV-1 audit_log account match; INV-2 RLS session variables set per request).
+- Forensic correlation columns (sessionId, requestId) on audit_log; outcome enum captures denied/failed/partial events.
+- Per-business Postgres sequences for order_number (race-free, year-format-preserving).
+- User credentials, login security, MFA factors split into dedicated tables; users table is metadata only.
+- Email verification, role expiration, bill-to-closing column all in place.
+
+Full rationale at `specs/01-schema-rationale.md`.
+
+---
+
+_Original decision below, preserved for the design-history thread._
+
 # Multi-Business Architecture (Pattern B)
 
 _Decided 2026-04-26 by Troy. Supersedes the implicit single-business assumption that drove the v1 schema draft (now `specs/01-schema.v1.draft.ts.superseded`)._
