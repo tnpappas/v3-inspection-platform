@@ -580,8 +580,15 @@ export const permissionGroups = pgTable("permission_groups", {
   key: varchar("key", { length: 100 }).primaryKey(),                  // e.g., "admin", "financial"
   name: varchar("name", { length: 100 }).notNull(),                   // human-readable: "Admin"
   description: text("description").notNull(),
-  // Cached: TRUE when any contained permission has sensitive=true. Recomputed
-  // by application code in the migration that mutates permission_group_members.
+  // Cached: TRUE when any contained permission has sensitive=true.
+  //
+  // MAINTENANCE CONTRACT: This column is computed and maintained at migration
+  // time. Whenever a migration mutates permission_group_members (adds, removes,
+  // or changes group membership), the migration MUST also call the recompute
+  // helper for affected groups. The schema does not enforce this via trigger;
+  // it is the migration author's responsibility. A test asserts that for every
+  // group, sensitive matches the OR of contained permissions' sensitive flags.
+  // See 06-security-spec.md S11 for the maintenance helper signature.
   sensitive: boolean("sensitive").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -616,6 +623,13 @@ export const rolePermissions = pgTable("role_permissions", {
   configuredAt: timestamp("configured_at", { withTimezone: true }).defaultNow().notNull(),
   configuredBy: uuid("configured_by").references(() => users.id),
 }, (t) => ({
+  // PK includes both nullable target columns. Postgres allows nulls in composite
+  // PKs as long as no two rows have identical values across the column set. The
+  // CHECK constraint below guarantees exactly one of permission_key/group_key is
+  // non-null per row, so the PK distinguishes (account, role, permission_key=X,
+  // group_key=null) from (account, role, permission_key=null, group_key=Y)
+  // cleanly. This is intentional design, not a mistake. Same pattern on
+  // user_permission_overrides.
   pk: primaryKey({ columns: [t.accountId, t.role, t.permissionKey, t.groupKey] }),
   byAccountRole: index("role_permissions_account_role_idx").on(t.accountId, t.role),
   exactlyOneTarget: check(
@@ -643,6 +657,12 @@ export const userPermissionOverrides = pgTable("user_permission_overrides", {
   grantedAt: timestamp("granted_at", { withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }),         // null = permanent; populated = revoke automatically
 }, (t) => ({
+  // PK includes both nullable target columns plus effect. Same intentional
+  // pattern as role_permissions: CHECK constraint enforces exactly-one-target;
+  // PK includes effect so a user can hold both a grant and a deny on the same
+  // target during transitions (rare but valid). Hot path index byUserBusiness
+  // serves the resolution algorithm's session-start query "all overrides for
+  // this user in this business."
   pk: primaryKey({ columns: [t.userId, t.businessId, t.permissionKey, t.groupKey, t.effect] }),
   byUserBusiness: index("user_permission_overrides_user_business_idx").on(t.userId, t.businessId),
   byExpires: index("user_permission_overrides_expires_idx").on(t.expiresAt).where(sql`${t.expiresAt} IS NOT NULL`),
