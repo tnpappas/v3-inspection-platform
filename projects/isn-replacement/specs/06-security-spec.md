@@ -141,6 +141,27 @@ Every table in `specs/01-schema.draft.ts` carries a header comment confirming ev
 
 Tables that touch PII reference back to this spec. The security review is then "is this annotation correct" rather than "did we think about this."
 
+## Critical invariants enforced at application layer
+
+DB-layer constraints handle most isolation. A small number of invariants cannot be expressed as foreign keys or CHECK constraints because the relationship is polymorphic. These are enforced at the application layer; violations are bugs and must be caught by tests and runtime guards.
+
+### INV-1: audit_log.account_id matches the entity's account
+
+`audit_log.entity_type` plus `audit_log.entity_id` reference a row whose own `account_id` (direct or inherited) MUST equal `audit_log.account_id`. The schema cannot enforce this with a foreign key because `entity_id` is polymorphic.
+
+Enforcement requirements:
+
+1. **Insert path:** every code path that writes to `audit_log` runs through a single helper (`writeAuditLog(...)`) that validates the entity's account_id matches the supplied account_id before insert. Direct INSERTs that bypass the helper are a bug.
+2. **Test coverage:** unit tests cover the helper's validation. Integration tests assert that inserting an audit_log row with a mismatched account_id throws.
+3. **Runtime check (paranoid mode):** in production, a per-day reconciliation job samples N audit_log rows and joins back to the entity to verify account_id matches. Reports any drift. Catches accidental direct inserts that escaped review.
+4. **PR review:** any direct `db.insert(auditLog)` in code review fails review unless explicitly justified as bypass.
+
+Violations of INV-1 are categorized as a security incident, not a bug. Cross-account leak via misclassified audit rows is the failure mode. RLS policies on `audit_log` use `account_id` as the isolation key, so a misclassified row would surface in the wrong account's audit views.
+
+### INV-2: RLS session variables set on every request
+
+Application middleware sets `app.current_account_id`, `app.current_business_id`, and `app.user_business_ids` on the Postgres session before any business-table query runs. RLS policies depend on these. A query without them returns zero rows, which is a safe failure mode but means a missing middleware call manifests as silent data invisibility, not corruption.
+
 ## Compliance posture (informational)
 
 We are not formally subject to HIPAA, GLBA, or PCI today. Property inspection PII does have **state-level breach notification obligations** in Virginia and most states we may operate in. The security model is built to be SOC-2-ready even if we never pursue SOC 2, because that posture covers the realistic threats: account takeover, accidental cross-tenant leak, insider misuse, and database compromise.

@@ -46,6 +46,62 @@ Tables that explicitly do NOT soft-delete:
 - `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
 - `audit_log`: append-only by design. Hard delete only via configured retention job.
 
+## audit_log review pass 2026-04-27
+
+### Forensic correlation columns
+
+Added `sessionId` (varchar 64) and `requestId` (uuid). Both nullable. They turn audit_log from a list-of-events into a graph of correlated events. Without them, reconstructing "what did this user do across this 30-minute window" is unreliable; with them, every action within a request shares a `requestId` and every request within a session shares a `sessionId`.
+
+Partial indexes on both (`WHERE col IS NOT NULL`) keep them cheap when most events have them populated.
+
+### ipAddress switched to inet
+
+Was `varchar(64)`. Now Postgres native `inet` type. Validated at insert (no malformed IPs sneak in), supports IPv4 and IPv6, and enables CIDR operators for forensic queries: `WHERE ip_address << '10.0.0.0/8'` to find all events from a subnet, `WHERE ip_address << inet_client_addr() & '/24'` for impossible-travel detection.
+
+Drizzle exposes `inet` via `drizzle-orm/pg-core`. TypeScript surface is still `string` on read.
+
+### outcome column
+
+New `auditOutcomeEnum`: `success | denied | failed | partial`. Default `success`. Three reasons:
+
+- **denied** logs failed permission checks. An attacker probing for accessible records leaves a clear trail of denied actions tied to their session and request IDs. Without this column, denied events were either dropped or logged as `success`, both wrong.
+- **failed** distinguishes runtime failures (validation, FK violation, integration error) from successful actions. Helps support diagnostics.
+- **partial** logs bulk operations that succeeded for some rows and failed for others. Details in `changes.metadata`.
+
+### changes payload, shape and size
+
+Application enforces a 64KB max on `changes` payloads. Reasoning:
+
+- A single audit row should not hold a 50MB attachment. Large blobs go in their own table or storage with the audit row referencing them.
+- 64KB accommodates the largest realistic before/after snapshot of a row in our schema, plus generous metadata.
+- `changesSize` (integer column) records the actual byte count for monitoring. Anomalies (e.g., creeping payload size on a particular endpoint) surface in dashboard queries.
+
+Documented shape:
+
+```
+{
+  before?: { ...partial or full row snapshot... },
+  after?:  { ...partial or full row snapshot... },
+  metadata?: { ...action-specific context... }
+}
+```
+
+For `action='read_sensitive'`, only `metadata` is typically populated (which fields were exposed, how many records). For `action='update'`, both `before` and `after`. For `action='delete'`, only `before`. For `action='export'`, `metadata` carries filter parameters and record count.
+
+### entity_type CHECK constraint
+
+Kept the column as `varchar(50)`. Added a CHECK constraint listing the canonical values. Trade-offs reviewed:
+
+- **pgEnum** would force a migration for every new entity type. Rejected.
+- **Free varchar** invites typos. Rejected.
+- **CHECK constraint** gives DB-layer enforcement against typos and stale values, with the trade that adding a new entity type is two synchronized edits (CHECK clause + `AUDIT_ENTITY_TYPES` constant). Accepted.
+
+The CHECK clause and the TypeScript constant must stay in sync. A future tooling check could grep both and assert equality.
+
+### Critical invariant INV-1
+
+Documented in the security spec: `audit_log.account_id` MUST match the entity's account_id. Cannot be FK-enforced because entity_id is polymorphic. Application enforces via a single `writeAuditLog(...)` helper and a daily reconciliation job. Direct `db.insert(auditLog)` calls in code review are a red flag. See `06-security-spec.md` Critical invariants section for full enforcement requirements.
+
 ## Membership and permission triple, review pass 2026-04-27
 
 ### Credentials split out of users

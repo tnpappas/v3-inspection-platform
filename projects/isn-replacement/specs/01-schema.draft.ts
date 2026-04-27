@@ -86,9 +86,11 @@ import {
   jsonb,
   uuid,
   bigint,
+  inet,
   primaryKey,
   index,
   uniqueIndex,
+  check,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -177,6 +179,60 @@ export const auditActionEnum = pgEnum("audit_action", [
   "read_sensitive",
   "export",                // bulk export of records (CSV, PDF, report download); distinct from view/read_sensitive
 ]);
+
+// Outcome of an audited action. success is the default; the others let us log
+// denied permission checks, blocked operations, and attempted exports without
+// dropping them silently. See review item 3 (audit_log).
+export const auditOutcomeEnum = pgEnum("audit_outcome", [
+  "success",
+  "denied",                // permission check or RLS-style block prevented the action
+  "failed",                // action attempted, encountered a runtime error (validation, FK, etc.)
+  "partial",               // bulk action partially succeeded; details in `changes`
+]);
+
+// Canonical entity_type values for audit_log. Keep in sync with the application's
+// constants. Adding a value here is a one-line code change; adding a value to a
+// pgEnum requires a DB migration. The CHECK constraint on audit_log.entity_type
+// references this list to give us DB-layer enforcement against typos and stale
+// types without enum-migration overhead. See review item 5 (audit_log).
+export const AUDIT_ENTITY_TYPES = [
+  // tenants and identity
+  "account",
+  "business",
+  "user",
+  "user_credential",
+  "user_security",
+  "user_mfa_factor",
+  "user_business",
+  "user_role",
+  // shared people / places
+  "customer",
+  "property",
+  "customer_business",
+  "property_business",
+  "customer_property",
+  "transaction_participant",
+  "agency",
+  "agency_business",
+  // operational reference
+  "service",
+  "inspector_hours",
+  "inspector_time_off",
+  "inspector_zip",
+  "inspector_service_duration",
+  // operational rows
+  "inspection",
+  "inspection_inspector",
+  "inspection_participant",
+  "inspection_service",
+  "reschedule_history",
+  // synthetic / non-row events
+  "login_attempt",         // pre-auth events with no entity_id
+  "session",
+  "export_job",            // future export job rows
+  "system",                // background workers, migrations
+] as const;
+export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[number];
 
 // =============================================================================
 // accounts (top-level licensing tenant)
@@ -1085,26 +1141,74 @@ export const rescheduleHistory = pgTable("reschedule_history", {
 // audit_log (account-scoped; nullable business_id for cross-business events)
 // =============================================================================
 // Table: audit_log
-// Security:      Append-only. JSON blob `changes` may contain PII snapshots. Encryption candidate for `changes` payload. Soft-delete: NO; data-retention job hard-deletes after configured window. RLS: account-scoped strictly; cross-account leak here = catastrophic.
-// Scalability:   PARTITION CANDIDATE on (account_id, created_at) quarterly per spec 07 Sc4. Highest-write table. Indexes lead with account_id. Expected row count at 10x: ~12M/year per account at full audit posture (writes + read_sensitive).
-// Multi-business: SCOPED on account_id (always); business_id nullable for account-level events. New businesses get their own log entries; partitioning later separates them physically.
+// Security:      Append-only. JSON blob `changes` may contain PII snapshots.
+//                Application-layer enforces a 64KB max on `changes` payloads;
+//                `changesSize` records the actual byte count for monitoring.
+//                Encryption candidate for `changes` payload. Soft-delete: NO;
+//                data-retention job hard-deletes after configured window. RLS:
+//                account-scoped strictly; cross-account leak here =
+//                catastrophic.
+//                CRITICAL INVARIANT: audit_log.account_id MUST match the
+//                account_id of the entity being audited. Not enforced as FK
+//                (entity_id is polymorphic). Application-layer guard before
+//                every insert. See security spec for explicit enforcement
+//                requirement.
+// Scalability:   PARTITION CANDIDATE on (account_id, created_at) quarterly per
+//                spec 07 Sc4. Highest-write table. Indexes lead with
+//                account_id. Expected row count at 10x: ~12M/year per account
+//                at full audit posture (writes + read_sensitive). Sizing must
+//                account for the read_sensitive multiplier (2-3x base writes).
+// Multi-business: SCOPED on account_id (always); business_id nullable for
+//                 account-level events. New businesses get their own log
+//                 entries; partitioning later separates them physically.
 export const auditLog = pgTable("audit_log", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
   businessId: uuid("business_id").references(() => businesses.id),    // null for account-level events
   userId: uuid("user_id").references(() => users.id),
+
+  // Forensic correlation
+  sessionId: varchar("session_id", { length: 64 }),                   // session correlation; null for pre-auth and system events
+  requestId: uuid("request_id"),                                      // correlates all actions within a single HTTP request
+
   action: auditActionEnum("action").notNull(),
-  entityType: varchar("entity_type", { length: 50 }).notNull(),
+  outcome: auditOutcomeEnum("outcome").notNull().default("success"),  // success | denied | failed | partial
+
+  entityType: varchar("entity_type", { length: 50 }).notNull(),       // CHECK-constrained to AUDIT_ENTITY_TYPES below
   entityId: uuid("entity_id"),
-  changes: jsonb("changes"),                                          // { before, after } - may contain PII
-  ipAddress: varchar("ip_address", { length: 64 }),
+
+  // Change payload. Application enforces max 64KB. Shape:
+  //   { before?: {...}, after?: {...}, metadata?: {...} }
+  // - before/after: full or partial entity snapshots, depending on action
+  // - metadata: action-specific context (e.g., export filters, override reason)
+  changes: jsonb("changes"),                                          // PII: changes (may contain snapshots)
+  changesSize: integer("changes_size"),                               // byte count of `changes` for monitoring; populated by application
+
+  ipAddress: inet("ip_address"),                                      // PII: address (IP can be PII per GDPR); native inet for IPv4/IPv6 + CIDR queries
   userAgent: text("user_agent"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byAccountCreatedAt: index("audit_log_account_created_at_idx").on(t.accountId, t.createdAt),
   byEntity: index("audit_log_entity_idx").on(t.entityType, t.entityId),
   byUser: index("audit_log_user_idx").on(t.userId),
   byBusinessCreatedAt: index("audit_log_business_created_at_idx").on(t.businessId, t.createdAt),
+  byRequest: index("audit_log_request_idx").on(t.requestId).where(sql`${t.requestId} IS NOT NULL`),
+  bySession: index("audit_log_session_idx").on(t.sessionId).where(sql`${t.sessionId} IS NOT NULL`),
+  // CHECK constraint enforcing entity_type membership in AUDIT_ENTITY_TYPES.
+  // Keeping the column as varchar (no enum migration cost) while gaining
+  // DB-layer protection against typos and stale types. Update both this list
+  // and AUDIT_ENTITY_TYPES together.
+  entityTypeCheck: check(
+    "audit_log_entity_type_check",
+    sql`entity_type IN (
+      'account','business','user','user_credential','user_security','user_mfa_factor','user_business','user_role',
+      'customer','property','customer_business','property_business','customer_property','transaction_participant','agency','agency_business',
+      'service','inspector_hours','inspector_time_off','inspector_zip','inspector_service_duration',
+      'inspection','inspection_inspector','inspection_participant','inspection_service','reschedule_history',
+      'login_attempt','session','export_job','system'
+    )`
+  ),
 }));
 
 // =============================================================================
