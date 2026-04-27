@@ -197,6 +197,13 @@ export const auditOutcomeEnum = pgEnum("audit_outcome", [
   "partial",               // bulk action partially succeeded; details in `changes`
 ]);
 
+// Permission override effect (v3.1). Used on user_permission_overrides.
+// Granular denies always win over group grants per the resolution algorithm in S11.
+export const permissionEffectEnum = pgEnum("permission_effect", [
+  "grant",
+  "deny",
+]);
+
 // Canonical entity_type values for audit_log. Keep in sync with the application's
 // constants. Adding a value here is a one-line code change; adding a value to a
 // pgEnum requires a DB migration. The CHECK constraint on audit_log.entity_type
@@ -212,6 +219,12 @@ export const AUDIT_ENTITY_TYPES = [
   "user_mfa_factor",
   "user_business",
   "user_role",
+  // permissions / RBAC (v3.1)
+  "permission",
+  "permission_group",
+  "permission_group_member",
+  "role_permission",
+  "user_permission_override",
   // shared people / places
   "customer",
   "property",
