@@ -470,14 +470,12 @@ export const userMfaFactors = pgTable("user_mfa_factors", {
 // Scalability:   PK (user_id, business_id). Index on (business_id) for the "users in business X" query. The user-side lookup is served by the PK leading column. Expected row count at 10x: ~50,000.
 // Multi-business: JUNCTION. Adding a new business adds rows here for relevant staff. No schema change.
 //
-// REVIEW(troy 2026-04-27 14:24 UTC) item 6 PENDING: is_primary moved to a future
-// user_preferences table per Hatch's recommendation; awaiting Troy's confirm.
-// For now isPrimary remains here so the schema does not regress; will be moved
-// in a separate commit if confirmed.
+// Pure membership facts only. UI preferences (e.g., which business to land in
+// on login) live in a future user_preferences table, NOT here. See rationale
+// doc "is_primary moved out of user_businesses" section.
 export const userBusinesses = pgTable("user_businesses", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   businessId: uuid("business_id").notNull().references(() => businesses.id, { onDelete: "cascade" }),
-  isPrimary: boolean("is_primary").default(false).notNull(),
   status: membershipStatusEnum("status").notNull().default("active"),
   joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
@@ -485,7 +483,6 @@ export const userBusinesses = pgTable("user_businesses", {
   byBusiness: index("user_businesses_business_idx").on(t.businessId),
   // Standalone (user_id) index dropped per review item 8: PK leading column
   // serves user-side lookups.
-  primaryUnique: uniqueIndex("user_businesses_primary_unique").on(t.userId).where(sql`${t.isPrimary} = true`),
 }));
 
 // =============================================================================

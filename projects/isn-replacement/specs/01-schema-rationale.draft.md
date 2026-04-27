@@ -101,13 +101,30 @@ Real-world cases:
 
 The sweep job runs hourly. Its query is served by `user_roles_expires_at_idx`, a partial index on `expires_at WHERE expires_at IS NOT NULL`.
 
-### is_primary on user_businesses, decision pending
+### is_primary moved out of user_businesses
 
-Review item 6: should `isPrimary` stay on `user_businesses` or move to a future `user_preferences` table?
+**Decision (Troy confirm 2026-04-27 14:42 UTC):** `isPrimary` belongs in a future `user_preferences` table, not on `user_businesses`. `user_businesses` is now a pure membership junction.
 
-**Hatch recommendation:** move to user_preferences. `isPrimary` is UI default context, not a membership fact. Membership tables describe membership; preferences describe preferences.
+**Until `user_preferences` table lands, UI fallback rule:**
 
-**Pending Troy confirm.** If confirmed, separate commit removes the column from `user_businesses` and replaces it with a deterministic UI fallback (lowest joined_at wins) until `user_preferences` lands.
+1. If a user has only one active business membership, that is their landing business.
+2. If multiple, the lowest `joinedAt` among `status='active'` rows wins.
+3. The fallback is deterministic and documented; if a user wants a different default, they will set it explicitly once `user_preferences` ships.
+
+**Future user_preferences table sketch** (NOT built today):
+
+```ts
+export const userPreferences = pgTable("user_preferences", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  primaryBusinessId: uuid("primary_business_id").references(() => businesses.id, { onDelete: "set null" }),
+  timeZone: varchar("time_zone", { length: 50 }),
+  theme: varchar("theme", { length: 20 }),
+  // ... other UI/UX preferences
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+```
+
+When `user_preferences` lands, migration backfills `primary_business_id` for existing users using the fallback rule above. From that point, the application reads `user_preferences.primary_business_id` first and falls back to the deterministic rule when null.
 
 ### Standalone user_id index dropped on user_businesses
 
