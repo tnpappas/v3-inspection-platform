@@ -28,10 +28,22 @@ This document is the dictionary every other building-phase deliverable reference
 - ISN fields use ISN's actual JSON keys (lowercase, sometimes oddly named like `sendSMS`).
 - v3 columns use the camelCase Drizzle property names.
 - "ISN type" reflects what the API returns. Many booleans are stringly typed (`"yes"` / `"no"` / `"true"`); migration coerces.
-- "Always populated" / "sometimes" / "never (Safe House)" reflect Phase 1 + Phase 2 sample data.
+- "Always populated" / "sometimes" / "never (Safe House)" reflect Phase 1 + Phase 2 sample data and are descriptive observations, not migration logic. Migration logic itself is account-agnostic (see next point).
 - PII examples use synthetic placeholders (`<EMAIL>`, `<NAME>`, `<UUID>`, `<PHONE>`) per the building-phase rule.
 - Where a field is dropped (cut), the cut list at the bottom carries the rationale.
 - Where a v3 column has no ISN counterpart, the "v3 fields ISN does not have" section explains.
+
+### Multi-account migration logic, account-agnostic
+
+This rebuild is licensing-ready (one account today, future licensees later). All migration logic in this spec is structural, not optimized for Safe House's specific data distribution. A licensee with a 90% portal booking mix and one with a 10% portal booking mix run the same migration code. Per-licensee variation is data, not logic.
+
+Where a default value or mapping is sensitive to operational context (default service durations, role-flag interpretation), the rule:
+
+1. Provides a structural default that fits a generic ISN tenant.
+2. Allows per-account override via a migration-config object passed to the migration script.
+3. Documents the default and the override mechanism.
+
+New licensees do not need migration code changes for different volume mixes or operational vocabularies. They need migration-config overrides, where applicable.
 
 ## Source fields covered
 
@@ -73,7 +85,7 @@ From the discovery phase:
 | `/me.photourl` | string | `users.photoUrl` | URL points at `v3.isnbin.com`; rehosted on our asset host on migration (job out of scope for first pass). |
 | `/me.sendSMS` | string `"true"`/`"false"` | `users.smsOptIn` | Coerced via `coerceIsnBoolean()`. |
 | `/me.modified` | ISO datetime | `users.updatedAt` | |
-| `/me.inspector`, `owner`, `manager`, `officestaff`, `callcenter`, `thirdparty` | string `"Yes"`/`"No"` | `user_roles.role` | One row per `Yes` flag. Mapping: `inspector`→`technician`, `owner`→`owner`, `manager`→`operations_manager`, `officestaff`→`dispatcher` (best-fit; confirm during user audit), `callcenter`→`client_success` (best-fit), `thirdparty`→`viewer`. Mapping captured in user audit step of migration plan. |
+| `/me.inspector`, `owner`, `manager`, `officestaff`, `callcenter`, `thirdparty` | string `"Yes"`/`"No"` | `user_roles.role` | One row per `Yes` flag. Default mapping (see Role flag mapping section below for per-account override): `inspector`→`technician`, `owner`→`owner`, `manager`→`operations_manager`, `officestaff`→`dispatcher`, `callcenter`→`client_success`, `thirdparty`→`viewer`. |
 | `/me.show` | string `"Yes"`/`"No"` | `users.status` | `Yes` → `active`; `No` → `inactive`. |
 | `/me.zips` | array of string | `technician_zips` rows | One row per ZIP for users where `inspector="Yes"`. Default `priority=1`. |
 | `/me.state` | UUID | (dropped) | We use `stateabbreviation` directly; ISN's state-UUID lookup table is not migrated. |
@@ -110,7 +122,21 @@ Same field set as `/me`. Each row maps to a `users` row in our seed account, plu
 | `show` | `services.active` | `"yes"`→`true`. |
 | `modified` | `services.updatedAt` | |
 
-**Migration note:** ISN has 27 ordertype rows but only 16 active (`show=yes`). 5 are duplicate `Reinspection` entries; 1 is the literal warning row `"******Please don't use any of the inspection types below this line******"`. Migration plan includes a cleanup pass: import all 27 with `active` set per their show flag, but the warning row is filtered out entirely (not migrated). Duplicates are imported as-is for traceability and tagged in `services.description` as `[duplicate, retired]` for staff to decide. **No `defaultDurationMinutes` value comes from ISN; migration sets all to 180 minutes (3 hours) and flags for staff to adjust per service.**
+**Migration note:** ISN ordertype rows often include duplicates and stale entries from years of accumulated data (the Safe House sample showed 27 rows of which 16 were active, with 5 duplicate Reinspections and 1 row whose name is literally a warning string). The cleanup pass: import all rows with `active` set per their `show` flag; filter out rows whose names match obvious warning-string patterns (containing `"please don't use"` or surrounded by `*`); tag duplicates in `services.description` as `[duplicate, retired]` for staff to decide post-migration.
+
+**`defaultDurationMinutes` migration default (account-agnostic):** ISN ordertypes have no duration. The migration default is per-business-type:
+
+- `inspection`: 180 minutes
+- `pool`: 60 minutes
+- `pest`: 45 minutes
+- `other`: 60 minutes
+
+The value lookup order:
+
+1. If `businesses.config.schedulingDefaults.defaultDurationMinutes` is set on the target business, use that.
+2. Else, use the per-type default above.
+
+Staff adjust per service post-migration via the services UI.
 
 `services.category` is NEW (no ISN counterpart) and left null on migration. Operations populates after import.
 
@@ -157,11 +183,13 @@ All three ISN entity types map into the single `transaction_participants` table.
 | `modified` | `updatedAt` | |
 | `show` | `status` | |
 
-**`isnSourceType` on each row:**
+**`isnSourceType` and `primaryRole` on each row:**
 
-- `/agents` → `transaction_participants.isnSourceType = 'agent'`, `primaryRole` defaults to `buyer_agent` (best guess; corrected by usage in `inspection_participants`).
-- `/escrowofficers` → `isnSourceType = 'escrowofficer'`, `primaryRole = 'escrow_officer'`.
-- `/insuranceagents` → `isnSourceType = 'insuranceagent'`, `primaryRole = 'insurance_agent'`.
+- `/agents` → `transaction_participants.isnSourceType = 'agent'`, `primaryRole = NULL` on initial import. A second migration pass derives `primaryRole` from the participant's actual deal-history distribution: count their `inspection_participants.role_in_transaction` rows by value; set `primaryRole` to the most frequent (typically `buyer_agent` or `listing_agent`). Ties resolve to `buyer_agent`. This avoids biasing toward Safe House's residential-buyer-heavy mix and works for licensees with different distributions.
+- `/escrowofficers` → `isnSourceType = 'escrowofficer'`, `primaryRole = 'escrow_officer'` (unambiguous from source type).
+- `/insuranceagents` → `isnSourceType = 'insuranceagent'`, `primaryRole = 'insurance_agent'` (unambiguous).
+
+For `/agents` rows that have ZERO `inspection_participants` after order migration (orphaned agents from old or test data), `primaryRole` stays NULL. The UI handles null `primaryRole` as "unspecified."
 
 **For agent/escrow/insurance items that ISN does not surface but Safe House uses (lender, attorney):** these only appear via custom workflow at order intake. Migration does not pre-populate them; they get added as bill-to-closing inspections come in.
 
@@ -206,8 +234,8 @@ The order endpoint returns 97 fields. Mapping by category.
 | `duration` | `inspections.durationMinutes` | |
 | `scheduleddatetime` | (dropped) | "When was the schedule set" event; this lives in audit_log via `/order/history` import. |
 | `scheduledby` | (dropped) | Same; audit log captures. |
-| `osscheduleddatetime` | (dropped) | Outsource scheduled timestamp; outsource not in scope for scheduling slice (preserve via `customFields` in migration if outsource flag is set). |
-| `osorder` | `inspections.customFields.osorder` | Boolean flag; outsource workflow lives in customFields until it gets its own slice. |
+| `osscheduleddatetime` | `inspections.customFields.onlineScheduledAt` | When populated, captures the timestamp the customer or realtor scheduled online via the legacy Online Scheduler. NOT an outsource event. Preserve when populated; null when absent. |
+| `osorder` | `inspections.source` (derived) | `"yes"` → `source='realtor_portal'`; `"no"` → `source='dispatcher'`. ISN's `os` prefix is the legacy Online Scheduler feature (web/portal booking), NOT outsourcing as the field name suggests; the `outsourceamount` on fees was 0 across all sampled orders. Migration loses the distinction between `realtor_portal` vs `client_booking` for historical orders (ISN does not separate them); forward bookings populate the actual source. See migration logic note in conventions section about account-agnostic mapping. |
 | `confirmeddatetime` | `inspections.confirmedAt` | Empty in pilot data; populated when client confirms. |
 | `confirmedby` | `inspections.confirmedBy` | |
 | `completeddatetime` | `inspections.completedAt` | |
@@ -413,6 +441,32 @@ The cut list. Each entry has a reason; future-Troy can override with a separate 
 | Soft-delete columns on 7 tables | Security spec S4. |
 | `businesses.displayOrder`, `businesses.config` | UI affordance + per-business catch-all config. |
 
+## Role flag mapping (account-agnostic with optional per-account override)
+
+Default mapping for ISN's six role flags to v3 `roleEnum`:
+
+| ISN flag | Default v3 role | Notes |
+|---|---|---|
+| `inspector=Yes` | `technician` | Stable across business types. |
+| `owner=Yes` | `owner` | Stable. |
+| `manager=Yes` | `operations_manager` | Stable. |
+| `officestaff=Yes` | `dispatcher` | Default; some licensees may map to `bookkeeper` or `client_success` instead. Per-account override supported. |
+| `callcenter=Yes` | `client_success` | Default; many licensees do not use this flag at all. Per-account override supported. |
+| `thirdparty=Yes` | `viewer` | Default. |
+
+**Per-account override mechanism:** the migration script accepts an optional `accountRoleMapping` config object:
+
+```ts
+type AccountRoleMapping = Partial<Record<
+  'inspector' | 'owner' | 'manager' | 'officestaff' | 'callcenter' | 'thirdparty',
+  Role | null   // null = do not grant any role for this flag
+>>;
+```
+
+For Safe House the migration runs with no override, using the defaults. A licensee where `callcenter` flagged staff who should be dispatchers can pass `{ callcenter: 'dispatcher' }` to override.
+
+The user audit step in the migration plan reviews each user's role flags and the resulting v3 role grants. Any user with an ambiguous classification (e.g., flagged for two roles that conflict) is surfaced for manual review before insert.
+
 ## Helper signatures
 
 The migration plan and migration scripts use these helpers. Implementations land in `specs/migration/helpers/`.
@@ -431,6 +485,14 @@ function normalizeIsnString(s: string | null | undefined): string | null;
 
 // Translate ISN status flag combination to v3 inspection status enum.
 function deriveStatusFromIsnOrder(o: ISNOrderDetail): InspectionStatus;
+
+// Translate ISN's `osorder` flag to v3 booking source. Account-agnostic:
+// 'yes' -> 'realtor_portal'; 'no' -> 'dispatcher'.
+function deriveSourceFromIsnOrder(o: ISNOrderDetail): BookingSource;
+
+// Apply per-business-type default duration when ISN ordertype has no duration
+// and businesses.config does not set a per-business override.
+function defaultDurationForBusinessType(type: BusinessType): number;
 
 // Translate ISN paid flag plus payment events to v3 payment status.
 function derivePaymentStatusFromIsn(o: ISNOrderDetail): PaymentStatus;
@@ -482,6 +544,6 @@ function translateIsnFoundation(uuid: string | null): string | null;
 
 4. **`scheduledby` and `scheduleddatetime` reconstruction priority.** These are ISN columns that we drop in favor of audit_log. If, during migration, the audit_log import does not yield the schedule event (because ISN history is incomplete for older orders), we lose schedule provenance. Recommendation: capture in the migration plan that for orders where history is sparse, populate `inspections.createdBy` from `scheduledby` as a fallback. Decide during migration script implementation.
 
-5. **Outsource workflow preservation.** `osorder=yes` is set on every order in our pilot (15/15). Either Safe House outsources nearly everything, OR `osorder` means something other than "outsourced." Unknown. Recommendation: treat `osorder` as a customFields hint, do not interpret. Confirm with Troy during migration plan finalization.
+5. ~~Outsource workflow preservation~~ — RESOLVED 2026-04-27. `os` is the Online Scheduler feature, not outsourcing. The 15-sample pilot was misread initially; correct distribution is roughly 47% `osorder=yes` (online-booked) and 53% `osorder=no` (dispatcher-booked). Mapping locked: `osorder='yes'` → `source='realtor_portal'`; `osorder='no'` → `source='dispatcher'`. `osscheduleddatetime` → `customFields.onlineScheduledAt`. Account-agnostic; future licensees with different volume mixes use the same logic. `outsourceamount` on fees stays mapped as currently described (preserved as a note when nonzero; zero everywhere in sampled data).
 
 6. **`utilitieson`, `propertyoccupied`, `salesprice`** placement. These could either live on `properties` (semantic argument: they describe the property) or on `inspections` (operational argument: they describe the property at the time of inspection, which can change). Today they go on `inspections.customFields`. Reconsider when those fields prove operationally important.
