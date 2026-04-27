@@ -98,7 +98,90 @@ Implications:
 
 **Extensibility boundary:** the architecture supports new service-business types out of the box. Non-service business types may require minor refactors of shared tables (e.g., adding a `locations` table parallel to `properties`). Not blocked, but not free.
 
-## Worked example: adding a new business
+## Layered worked examples (added 2026-04-27)
+
+The v3 schema has three layers: account, business, shared-within-account entities. Adding a new BUSINESS within an existing account is one shape of expansion. Adding a new ACCOUNT (a licensee) is a different, larger shape. Both are documented below.
+
+## Worked example 1: adding a new account (licensing flow)
+
+Scenario: Acme Inspection Services in Florida licenses our platform.
+
+Steps:
+
+1. **Insert the account row.**
+
+   ```sql
+   INSERT INTO accounts (id, name, slug, status, plan_tier,
+                         billing_email, billing_name, billing_address1, billing_city, billing_state, billing_zip,
+                         config)
+   VALUES (gen_random_uuid(),
+           'Acme Inspection Services',
+           'acme-inspect',                          -- globally unique
+           'active',
+           'starter',                               -- plan tier (vs 'internal' for our account)
+           'billing@acmeinspect.com',
+           'Acme Inspection Services LLC',
+           '100 Main St',
+           'Tampa', 'FL', '33601',
+           jsonb_build_object(
+             'branding', jsonb_build_object('productName', 'Acme Inspect'),
+             'security', jsonb_build_object('requireMfaForOwners', true),
+             'licensing', jsonb_build_object('contractStartDate', '2026-05-01', 'seatLimit', 25)
+           ));
+   ```
+
+2. **Provision the seed user (the first owner).**
+
+   ```sql
+   INSERT INTO users (id, account_id, email, display_name, status)
+   VALUES (gen_random_uuid(), <accountId>, 'owner@acmeinspect.com', 'Acme Owner', 'invited');
+   ```
+
+   The seed user has `status='invited'`. They receive an enrollment email with a single-use token. On enrollment, they set their password and `users.status` flips to `active`. `emailVerifiedAt` populates as part of the same flow.
+
+3. **Provision the seed business.**
+
+   ```sql
+   INSERT INTO businesses (id, account_id, name, slug, type, status, display_order, created_by, last_modified_by)
+   VALUES (gen_random_uuid(), <accountId>,
+           'Acme Property Inspections', 'acme-property',  -- unique within account
+           'inspection', 'active', 1, <ownerId>, <ownerId>);
+   ```
+
+4. **Wire up the seed user's membership and roles.**
+
+   ```sql
+   INSERT INTO user_businesses (user_id, business_id, status) VALUES (<ownerId>, <businessId>, 'active');
+   INSERT INTO user_roles (user_id, business_id, role, granted_by) VALUES (<ownerId>, <businessId>, 'owner', NULL);
+   ```
+
+   `granted_by=NULL` because this is a system seed. The audit_log entry for the seed event records `userId=NULL` and a `metadata.context='system_seed'` payload.
+
+5. **Provision the order_number sequence for the business.**
+
+   ```sql
+   CREATE SEQUENCE order_number_seq_acme_property START 1;
+   ```
+
+   Format: `${businessPrefix}-${currentYear}-${nextval():06d}`. Application code reads `businesses.config` (or a dedicated prefix column when added) to find the prefix.
+
+6. **Verify RLS isolation.**
+
+   Run a test query as the new owner; verify they cannot see any data from any other account. Add a smoke test to the deployment pipeline that asserts the new account's RLS works in both directions.
+
+7. **Send the enrollment email.**
+
+That is the complete account onboarding flow. **No schema change is required to onboard a new account.** All shared tables (customers, properties, agencies, transaction_participants) start empty for the new account and accumulate as that account does business.
+
+When the licensee adds their second business (e.g., Acme adds a pest service):
+
+- Repeat step 3 with `type='pest'` for `businesses`.
+- Add `user_businesses` rows for staff who serve pest.
+- Add `user_roles` rows for those staff.
+- Provision the order_number sequence for the new business.
+- No further schema change.
+
+## Worked example 2: adding a new business to an existing account
 
 Scenario: Safe House decides to launch a fourth business, "Coastal Junk Removal."
 
@@ -170,9 +253,58 @@ Every table in `specs/01-schema.ts` carries a header comment confirming evaluati
 // Multi-business: [shared | scoped | junction], [how it adapts when a new business is added]
 ```
 
+## Future expansion: organizations table
+
+Review decision 2026-04-27: lender institutions and law firms today live in the `agencies` table alongside real estate brokerages. This is a temporary polymorphism captured in the schema rationale doc and noted in the `agencies` table comment block.
+
+When bill-to-closing graduates from "capture in notes and rationale" to "feature with its own UI," the polymorphism is replaced by an `organizations` table with a type discriminator.
+
+### Sketched future schema
+
+```ts
+export const organizationTypeEnum = pgEnum("organization_type", [
+  "real_estate_brokerage",
+  "lender_institution",
+  "law_firm",
+  "escrow_company",
+  "insurance_company",
+  "other",
+]);
+
+export const organizations = pgTable("organizations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  accountId: uuid("account_id").notNull().references(() => accounts.id),
+  type: organizationTypeEnum("type").notNull(),
+  name: varchar("name", { length: 255 }).notNull(),
+  // ... shared corporate fields ...
+  // type-specific fields by convention land in `details jsonb` to avoid NULL columns:
+  details: jsonb("details").default(sql`'{}'::jsonb`).notNull(),
+  // ...
+});
+```
+
+### Worked migration to introduce organizations
+
+1. Create `organizations` table.
+2. For each `agencies` row, INSERT a corresponding `organizations` row with `type='real_estate_brokerage'`, copying name, address, contact fields, and `details` populated from the agency's existing data.
+3. Add `organization_id` column to `transaction_participants` (nullable) referencing `organizations.id`.
+4. Backfill `transaction_participants.organization_id` from the agency_id linkage where `agencyId IS NOT NULL`.
+5. For new lenders and attorneys, application creates `organizations` rows with `type='lender_institution'` or `type='law_firm'` and links via `organization_id` on the participant.
+6. Decide on agencies' future: either retire the table (migrate all rows to organizations and drop) or keep as a real-estate-only narrower view backed by a partial index on organizations.
+
+Additive change. No breaking changes to existing operational records.
+
+The details jsonb column carries type-specific fields:
+
+- For `lender_institution`: NMLS ID, branch info, primary contact name.
+- For `law_firm`: bar number(s), jurisdictions, paralegal contact name.
+- For `real_estate_brokerage`: license number, MLS affiliations.
+
+When a details key proves universal across rows, promote it to a real column.
+
 ## Open items for spec finalization
 
-1. Polymorphic `reschedule_history` vs per-op `*_reschedule_history` decision.
-2. Whether `inspector_hours`, `inspector_time_off`, `inspector_zips` should be renamed to a generic `technician_*` to match the per-business-type term ("inspector" at Safe House, "pool tech" at HCJ).
+1. Polymorphic `reschedule_history` vs per-op `*_reschedule_history` decision. Today the schema has a single `reschedule_history` scoped to inspections only. When pool_jobs and pest_treatments land, decide between extending reschedule_history with a polymorphic entity_type column or creating per-op tables.
+2. ~~Whether `inspector_hours`, `inspector_time_off`, `inspector_zips` should be renamed to a generic `technician_*`~~ — RESOLVED 2026-04-27. Renamed to `technician_*` in v3.
 3. Cross-business reporting surface API design.
-4. Account-level vs business-level role hierarchy when `accounts` table lands.
+4. Account-level vs business-level role hierarchy. Today no `account_roles` table; an account-wide owner has one `user_roles` row per business in their account. When pain warrants, add `account_roles` for true account-wide grants. Documented in schema rationale.
