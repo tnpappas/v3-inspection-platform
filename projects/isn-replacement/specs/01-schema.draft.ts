@@ -776,6 +776,15 @@ export const inspections = pgTable("inspections", {
   customerId: uuid("customer_id").references(() => customers.id),
   propertyId: uuid("property_id").references(() => properties.id),
 
+  // Bill-to-closing implementation. NULL means the customer is responsible for
+  // payment. When populated, this is the participant (lender, attorney, TC,
+  // etc.) who receives the invoice and whose office controls the payment
+  // timing. Constrained to a transaction_participants row, which already lives
+  // in the inspection_participants junction for this inspection. Application
+  // logic should validate the participant IS on inspection_participants before
+  // accepting the assignment. See bill-to-closing section in the rationale doc.
+  billToParticipantId: uuid("bill_to_participant_id").references(() => transactionParticipants.id),
+
   // Multi-axis status
   status: inspectionStatusEnum("status").notNull().default("scheduled"),
   paymentStatus: paymentStatusEnum("payment_status").notNull().default("unpaid"),
@@ -784,9 +793,12 @@ export const inspections = pgTable("inspections", {
   reportReleased: boolean("report_released").default(false).notNull(),
   reportReleasedAt: timestamp("report_released_at", { withTimezone: true }),
 
-  // Phase 2 pilot decisions: confirmedAt and initialCompletedAt
+  // Phase 2 pilot decisions: confirmedAt and initialCompletedAt with their
+  // corresponding "by" columns (the actor matters for these events).
   confirmedAt: timestamp("confirmed_at", { withTimezone: true }),                    // ISN: confirmeddatetime
+  confirmedBy: uuid("confirmed_by").references(() => users.id),                      // null when client self-confirmed via portal
   initialCompletedAt: timestamp("initial_completed_at", { withTimezone: true }),     // ISN: initialcompleteddatetime (distinct from completedAt for QA reopen)
+  initialCompletedBy: uuid("initial_completed_by").references(() => users.id),       // who marked first-completion (typically the lead inspector)
 
   // Finance
   feeAmount: decimal("fee_amount", { precision: 10, scale: 2 }).notNull(),
@@ -802,7 +814,10 @@ export const inspections = pgTable("inspections", {
   customFields: jsonb("custom_fields").default(sql`'{}'::jsonb`).notNull(),
 
   // Lifecycle
-  rescheduleCount: integer("reschedule_count").default(0).notNull(),
+  // NOTE: rescheduleCount is intentionally NOT a column. Compute from
+  // `reschedule_history` via COUNT() when needed. Denormalized counters drift
+  // over time. JOIN cost is acceptable with the (inspection_id) index on
+  // reschedule_history.
   cancelledAt: timestamp("cancelled_at", { withTimezone: true }),                    // ISN: deleteddatetime per platform issue #9
   cancelledBy: uuid("cancelled_by").references(() => users.id),                      // ISN: deletedby
   cancelReason: text("cancel_reason"),
