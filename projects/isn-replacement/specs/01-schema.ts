@@ -1,7 +1,14 @@
 /**
- * 01-schema.ts (v3, licensing-ready)
+ * 01-schema.ts (v3, licensing-ready) — LOCKED 2026-04-27
  *
- * STATUS: DRAFT, awaiting Troy's review. Do not import. Do not migrate.
+ * STATUS: LOCKED. Canonical schema for the rebuild. Subsequent changes follow
+ * the migration-plan workflow (additive migrations, backwards-compatible
+ * changes, deprecation cycles). Direct edits to existing column shapes require
+ * an explicit decision doc.
+ *
+ * Locked at git tag `v3-schema-locked` after Troy's approval 2026-04-27 15:22 UTC.
+ * Predecessor drafts preserved as `01-schema.v1.draft.ts.superseded` and
+ * `01-schema.v2.draft.ts.superseded` for design history.
  *
  * Architecture: licensing-ready from the foundation. `accounts` is a first-class
  * top-level tenant; Pattern B (shared customers/properties across businesses)
