@@ -115,8 +115,9 @@ Passport.js (already in the stack) with the following:
 - Cookies: `httpOnly: true`, `secure: true` in production, `sameSite: 'strict'` (upgrade from current `'lax'` in the existing Replit project).
 - Encrypted session payload at rest. The session table sits in the same DB but the payload is encrypted client-side before storage. (Decision to lock in spec finalization.)
 - Idle timeout: 24 hours default, 1 hour for sensitive admin contexts.
-- Absolute timeout: 30 days, configurable per business via `businesses.config`.
+- Absolute timeout: 30 days. **Configurable per account via `accounts.config.session.absoluteMaxDays`**, NOT per business. Reason: a user belongs to exactly one account (Pattern 1), so session lifetime is an account-level concern. Per-business overrides would be ambiguous for users with multi-business membership.
 - Logout invalidates the server-side session immediately, not just clears the cookie.
+- Session row carries `account_id`. RLS on the session table filters to the user's account. No cross-account session can ever resolve to a different account's user.
 
 The current Replit project uses `sameSite: 'lax'` and a 7-day max age. **The security spec tightens both before production launch.** Documented as a known delta.
 
@@ -126,10 +127,62 @@ A user from HCJ cannot export Safe House data, regardless of their administrativ
 
 1. RLS at the database layer (S1) makes cross-business reads impossible at the source.
 2. The export API checks `userIsInBusiness(userId, businessId)` before initiating any export job.
-3. Export job records (which become a future `export_jobs` table) carry `business_id` and are themselves business-scoped.
-4. Email/SMS notifications about exports include the business name to make cross-business slips obvious.
+3. Export job records (a future `export_jobs` table) carry `business_id` and are themselves business-scoped.
+4. `audit_log.action='export'` is logged on every export, with `outcome='success' | 'denied' | 'failed' | 'partial'` capturing the result.
+5. Email/SMS notifications about exports include the business name to make cross-business slips obvious.
 
-Exception: account-level owner roles (a future concept tied to the deferred `accounts` table) can export across businesses they own. This permission is not implemented day one and requires explicit user opt-in plus extra audit.
+Account-level admin can export across businesses they own with two extra requirements: explicit account-level role grant and an additional audit_log entry indicating the cross-business intent. Implementation deferred to the export-jobs slice.
+
+### S9. Account isolation (the outer boundary)
+
+A user from account X cannot read, write, or even infer the existence of records in account Y. This is the most damaging failure mode in the system; cross-account leak is treated as a security incident.
+
+Enforcement layers, defense in depth:
+
+1. **RLS at the database layer.** Every account-scoped table has a policy keyed on `current_setting('app.current_account_id')`. A query without that session variable set returns zero rows. Set it once per request in middleware before any business-table query runs.
+2. **API layer.** Every authenticated request resolves the user's account_id from the session and sets `app.current_account_id` and `app.user_business_ids`. Failure to set these is a server-side bug that manifests as silent invisibility, which is the safe failure mode (no data leaks; some queries return empty).
+3. **INV-1 invariant.** `audit_log.account_id` MUST match the audited entity's account. See "Critical invariants" section. Cross-account audit log writes are a violation.
+4. **Slug uniqueness.** `accounts.slug` is globally unique; `businesses.slug` is unique per `(account_id, slug)`. URL paths starting with the slug never collide across accounts.
+5. **Cross-account export prohibition.** A user cannot trigger any export, report, or background job that produces records from an account they do not belong to. The export API rejects the request before any data is read; the audit log captures the denied attempt with `outcome='denied'`.
+6. **Login flow.** Email lookup is scoped to a single account. The login form either accepts a tenant-prefixed URL (e.g., `safehouse.app.example.com`) or includes an account selector. There is no global email index across accounts.
+7. **Search.** Application-layer search functions accept account_id explicitly and pass it through every query; no "all-accounts search" exists in user-facing surfaces.
+
+What fails secure: missing RLS session variable returns zero rows. Missing account_id on a query returns zero rows. Mismatched audit log account_id is caught by INV-1's daily reconciliation job and reported.
+
+What does not fail secure (must be tested): direct database access by an authenticated administrator (production database connection). This is governed by infrastructure controls (VPN, audit, MFA on database tooling), not application logic.
+
+### S10. MFA enforcement policy
+
+MFA is implemented via `user_mfa_factors` (TOTP, backup codes, future WebAuthn). Enforcement policy is configurable per account.
+
+**Default policy:**
+
+- MFA is **optional** for all users by default.
+- The UI prompts users to enable MFA after first login and tracks the prompt.
+- For **production accounts** (any account with `accounts.plan_tier != 'internal'` or with `accounts.config.security.requireMfaForOwners = true`), MFA is **required for the `owner` role**. An owner without an enabled MFA factor cannot access account-level admin surfaces.
+
+**Per-account configurable enforcement** (`accounts.config.security`):
+
+- `requireMfaForOwners` (boolean, default true for non-internal plans)
+- `requireMfaForRoles` (array of roleEnum values, default `[]` plus `["owner"]` per the rule above)
+- `requireMfaForPiiAccess` (boolean, default false today; required to graduate the account to a higher security posture)
+- `mfaGracePeriodDays` (integer, default 7) — how long after a role grant the user has to enroll before being locked out
+
+**Application enforcement:**
+
+- On login, check whether the user's effective roles require MFA per the account policy.
+- If MFA is required and not enrolled, redirect to the enrollment flow.
+- If MFA is required and the grace period has elapsed without enrollment, deny login with a clear message.
+- After enrollment, login requires successful MFA challenge; bypass paths are limited to backup codes.
+
+**Audit log signals:**
+
+- MFA enrollment: `action='create'`, `entity_type='user_mfa_factor'`.
+- MFA challenge success: `action='login'`, `outcome='success'`, with metadata indicating MFA was required and satisfied.
+- MFA challenge failure: `action='login'`, `outcome='denied'`, with metadata indicating which factor failed.
+- MFA bypass via backup code: `action='login'`, `outcome='success'`, with metadata flagging backup-code use (so operations can investigate if backup codes are being burned).
+
+MFA secrets in `user_mfa_factors.secret` are encrypted at the application layer using a key from the secrets store (S6). Database-only encryption is insufficient because TOTP shared secrets are equivalent to the password if exposed.
 
 ## Schema-level checklist (per-table)
 
@@ -142,6 +195,9 @@ Every table in `specs/01-schema.ts` carries a header comment confirming evaluati
 Tables that touch PII reference back to this spec. The security review is then "is this annotation correct" rather than "did we think about this."
 
 ## Critical invariants enforced at application layer
+
+Documented separately from S1-S10 because these are application-layer enforcement requirements that supplement DB-layer constraints, not policy statements.
+
 
 DB-layer constraints handle most isolation. A small number of invariants cannot be expressed as foreign keys or CHECK constraints because the relationship is polymorphic. These are enforced at the application layer; violations are bugs and must be caught by tests and runtime guards.
 
