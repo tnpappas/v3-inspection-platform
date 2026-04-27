@@ -21,6 +21,56 @@ _Status: LOCKED 2026-04-27 alongside the schema (git tag `v3-schema-locked`). Su
 13. [Per-table rationale stubs](#rationale-per-table)
 14. [Open questions](#open-questions-tracked-here)
 
+## Migration design principles (added 2026-04-27 during spec 04 lock)
+
+Two patterns surfaced during the field-mapping spec that apply broadly to any future migration work in this codebase. Captured as principles so they propagate.
+
+### Principle 1: Post-pass derivation over import-time guessing
+
+Whenever a column's value can be derived from related data after a migration import is complete, prefer the post-pass derivation over a guess at import time. Hardcoded defaults are the wrong tool when the data itself can answer the question.
+
+**Example (spec 04, transaction_participants.primaryRole):** the migration script imports agent records with `primaryRole = NULL`. After orders and inspection_participants rows are imported, a second pass counts each participant's `inspection_participants.role_in_transaction` distribution and sets `primaryRole` to the most frequent value. The data itself answers what role the participant typically plays, with no guess required.
+
+**When this applies:**
+
+- The column is a hint or summary derivable from related rows.
+- The related rows are imported in the same migration run.
+- A wrong import-time guess would mislead until manually corrected.
+
+**When it does not apply:**
+
+- The column is structurally required for downstream FK lookups (cannot be NULL temporarily).
+- The derivation depends on data outside the migration scope.
+
+Document the post-pass step in the migration plan when this pattern is used.
+
+### Principle 2: Per-account config for terminology, not code branches
+
+When migration logic depends on per-account operational vocabulary (role flag meanings, custom field names, lookup table values, business-specific defaults), the variation lives in a per-account config object passed to the migration script. NOT in conditional code branches keyed on account identity.
+
+**Example (spec 04, accountRoleMapping):** ISN's role flags (`officestaff`, `callcenter`, etc.) mean different things at different licensees. The migration script accepts an optional `AccountRoleMapping` config that overrides the default mapping. Safe House runs without overrides; a licensee where `callcenter` flagged dispatch staff passes `{ callcenter: 'dispatcher' }`.
+
+**When this applies:**
+
+- The mapping is structural (one ISN value to one v3 value) but the choice varies per account.
+- Adding a new licensee should not require a new code branch.
+- The default value is reasonable for a generic ISN tenant.
+
+**Pattern:**
+
+```ts
+type PerAccountConfig = {
+  roleMapping?: AccountRoleMapping;
+  fieldNameMapping?: AccountFieldNameMapping;
+  lookupOverrides?: AccountLookupOverrides;
+  // ... other terminology-sensitive config ...
+};
+```
+
+The migration script accepts `PerAccountConfig` as input. Defaults baked into the script work for the common case (Safe House and similar). Licensees with diverging operational vocabulary supply overrides.
+
+**Anti-pattern to avoid:** branching on account_id, account name, or licensee tier inside migration logic. That makes the script account-aware in a way that does not scale.
+
 ## Architectural overview
 
 The v3 schema is built around three layered concerns. Each layer has its own isolation boundary and its own set of shared resources.

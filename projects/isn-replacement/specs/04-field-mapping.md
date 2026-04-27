@@ -1,8 +1,6 @@
 # Field Mapping: ISN to v3
 
-_Status: DRAFT, awaiting Troy's review. Locks alongside spec 02, 03, 05 in the building phase._
-
-_Companion to `specs/01-schema.ts` (v3 schema, locked at git tag `v3-schema-locked`)._
+_Status: LOCKED 2026-04-27. Companion to `specs/01-schema.ts` (v3 schema, locked at git tag `v3-schema-locked`). Subsequent updates land additively; the open-questions section tracks unresolved items that surfaced during the field-mapping pass._
 
 This document is the dictionary every other building-phase deliverable references. The migration plan, migration scripts, API contract, and user stories all assume this mapping is correct.
 

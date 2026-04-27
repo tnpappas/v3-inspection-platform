@@ -2,6 +2,16 @@
 
 _Status: DRAFT, scaffolding only. Will be filled out fully after the schema is locked. Captured here so commitments made during discovery do not get lost._
 
+## Migration design principles
+
+_Captured 2026-04-27 during spec 04 lock; documented in full in `01-schema-rationale.md`. Repeated here because they govern this entire migration plan._
+
+1. **Post-pass derivation over import-time guessing.** When a column's value can be derived from related data after import, derive in a second pass rather than guessing at import time. Spec 04 example: `transaction_participants.primaryRole` is NULL on initial import; a post-pass counts each participant's `inspection_participants.role_in_transaction` distribution and sets the most frequent value. Reduces wrong defaults that mislead until manually corrected.
+
+2. **Per-account config for terminology, not code branches.** Migration logic that depends on per-account operational vocabulary (role flag meanings, custom field names, lookup table values, business-specific defaults) lives in a per-account config object passed to the migration script. NOT in conditional branches keyed on account identity. Spec 04 example: `accountRoleMapping` config overrides default ISN role flag mappings without requiring code changes for new licensees.
+
+Both principles apply to every step in this plan and every script in `specs/migration/`. New steps that introduce account-sensitive logic must respect these principles.
+
 ## Source decisions and findings
 
 - `decisions/2026-04-26-design-decisions.md` D5: user-audit step required.
