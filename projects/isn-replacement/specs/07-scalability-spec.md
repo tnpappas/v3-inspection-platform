@@ -58,18 +58,49 @@ These get explicit `index()` declarations in the schema draft on the next pass.
 
 ### Sc4. Partitioning strategy, designed but not implemented
 
-Two tables are obvious partition candidates:
+Two tables are obvious partition candidates. **Schema is partition-ready: partition key columns are NOT NULL, no incoming FKs from other tables on the partition keys, queries always include the partition key in the WHERE clause.**
 
-- **`audit_log`**: partition by `(business_id, created_at)` quarterly or yearly. At 10x scale this table will be the largest in the system. Quarterly partitions of ~600K rows are easy to drop or archive.
-- **`inspections`**: partition by `(business_id, scheduled_at)` yearly. At 10x scale this table is medium-sized but the access pattern is heavily skewed toward "current and upcoming," so partitioning lets old years move off hot indexes.
+#### audit_log partitioning
 
-**Implementation deferred until volume warrants.** Today both tables are non-partitioned. The schema design constraints to keep partitioning a no-rewrite future option:
+Partition by `(account_id, created_at)` quarterly.
 
-- Partition key columns (`business_id`, `created_at` or `scheduled_at`) are NOT NULL on these tables. **Confirm in v2 schema annotation pass.**
-- Foreign keys do not point INTO `audit_log` or `inspections` from elsewhere. (Inspections has FKs pointing to it from `reschedule_history`, `inspection_inspectors`, etc. Those need partition-aware design when the time comes. Documented now so the migration path is known.)
-- Queries always include the partition key in the WHERE clause. The hot-path query analysis below verifies this.
+**Row count math (updated 2026-04-27 with read_sensitive multiplier):**
 
-### Sc5. Hot-path query analysis
+- Base writes per audit-event: ~12M/year per account at 10x.
+- Read-sensitive multiplier (S5 reads of PII produce audit entries): **2-3x**.
+- Realistic upper bound at 10x scale: **24-36M rows/year per account**.
+- Quarterly partitions: **6-9M rows per partition per account**.
+- Postgres handles partitions of this size comfortably; partition pruning means a query for "last 30 days of audit_log for account X" touches one partition.
+
+When to implement: when audit_log row count for a single account crosses ~10M total, or when queries on the table show degraded latency. Whichever first.
+
+Retention via partition drop: the data-retention job becomes "DROP PARTITION older than the configured window" instead of row-by-row DELETE. Far faster.
+
+#### inspections partitioning
+
+Partition by `(business_id, scheduled_at)` yearly.
+
+**Row count math:**
+
+- ~24,000 inspections/year per business at 10x sustained.
+- ~600,000 cumulative inspections per business after 25 years.
+- Yearly partitions of ~24K rows are small but still useful for query pruning (current year and prior year cover 99% of working queries).
+- The access pattern is heavily skewed toward "current and upcoming," so partitioning lets old years move off hot indexes.
+
+When to implement: at the same time as audit_log partitioning, since the operational machinery (partition naming convention, retention policy, monitoring) is the same.
+
+#### Constraints already in place to keep partitioning a no-rewrite future move
+
+- `audit_log.account_id` is NOT NULL.
+- `audit_log.created_at` has a NOT NULL default of `now()`.
+- `inspections.business_id` is NOT NULL.
+- `inspections.scheduled_at` is NOT NULL.
+- No FKs from other tables point at `audit_log.id` (it has no children).
+- FKs pointing at `inspections.id` exist (from `reschedule_history`, `inspection_inspectors`, `inspection_participants`, `inspection_services`). Postgres declarative partitioning supports FKs to partitioned tables as of 12+; we are on 16. Should not block, but worth verifying when implementing.
+
+### Sc5. Hot-path query analysis (refreshed for v3 schema lock 2026-04-27)
+
+Four UI surfaces dominate performance. All queries reference `account_id` or transitively inherit it via FK chain to satisfy RLS. Composite indexes lead with the most-selective field for the query (typically `business_id` for operational queries; `account_id` for cross-business shared-table queries).
 
 Four UI surfaces dominate performance:
 
@@ -82,11 +113,12 @@ SELECT * FROM inspections
 WHERE business_id = $1
   AND status IN ('scheduled','confirmed','en_route','in_progress')
   AND scheduled_at >= now()
+  AND deleted_at IS NULL
 ORDER BY scheduled_at
 LIMIT 200;
 ```
 
-Index served: `(business_id, status, scheduled_at)`. Expected cost at 10x: a single B-tree range scan, sub-10ms.
+Index served: `inspections_biz_status_scheduled_idx` on `(business_id, status, scheduled_at)`. RLS adds the implicit account scope. Expected cost at 10x: a single B-tree range scan, sub-10ms.
 
 #### B. Inspector daily view
 
@@ -97,10 +129,11 @@ SELECT * FROM inspections
 WHERE business_id = $1
   AND lead_inspector_id = $2
   AND scheduled_at BETWEEN $3 AND $4
+  AND deleted_at IS NULL
 ORDER BY scheduled_at;
 ```
 
-Index served: `(business_id, lead_inspector_id, scheduled_at)`. Expected cost: sub-5ms.
+Index served: `inspections_biz_inspector_scheduled_idx` on `(business_id, lead_inspector_id, scheduled_at)`. Expected cost: sub-5ms.
 
 #### C. Realtor portal
 
@@ -112,11 +145,12 @@ FROM inspection_participants ip
 JOIN inspections i ON i.id = ip.inspection_id
 WHERE ip.participant_id = $1
   AND i.business_id = $2
+  AND i.deleted_at IS NULL
 ORDER BY i.scheduled_at DESC
 LIMIT 50;
 ```
 
-Indexes served: `inspection_participants(participant_id)`, `inspections(id)` PK. Realtor can see across businesses **only if** they are linked through participants in multiple businesses; permissions enforced at the API + RLS layer.
+Indexes served: `inspection_participants_participant_idx`, `inspections(id)` PK. The realtor is a `transaction_participant` row scoped to the account. They can see participants on inspections across businesses only if they have the relevant `transaction_participants` row linked. RLS plus the API permission check enforce account-and-business scoping.
 
 #### D. Available slot computation
 
@@ -149,6 +183,40 @@ hours AS (
 ```
 
 Worst case at 10x: 50 inspectors × 14 days × 96 30-minute slots = 67,200 slot candidates per cross-inspector query. Pure SQL is too slow at that scale. **The slot algorithm runs as a service-layer function with caching, not as a single SQL query.** Caching strategy in Sc7.
+
+#### E. Cross-business customer history (added 2026-04-27)
+
+A designed use case (Pattern B): "Show all activity for customer X across all businesses they have used." Common scenario: Sarah Williams uses Safe House for an inspection, then HCJ for pool service. Single customer record, two businesses, multiple operational rows.
+
+```sql
+-- Step 1: confirm customer is in this account
+SELECT * FROM customers WHERE id = $customerId AND account_id = $accountId AND deleted_at IS NULL;
+
+-- Step 2: list businesses the customer has activity with
+SELECT cb.business_id, b.name, cb.first_seen_at, cb.last_activity_at
+FROM customer_businesses cb
+JOIN businesses b ON b.id = cb.business_id
+WHERE cb.customer_id = $customerId AND b.account_id = $accountId
+ORDER BY cb.last_activity_at DESC;
+
+-- Step 3: pull operational rows from each business (today: inspections only)
+SELECT * FROM inspections
+WHERE business_id IN ($businessIds)
+  AND customer_id = $customerId
+  AND deleted_at IS NULL
+ORDER BY scheduled_at DESC
+LIMIT 100;
+```
+
+Indexes served:
+
+- Step 1: `customers` PK plus `(account_id)` filter via `customers_account_idx`.
+- Step 2: `customer_businesses` PK on `(customer_id, business_id)`.
+- Step 3: `inspections_biz_customer_scheduled_idx` on `(business_id, customer_id, scheduled_at)`.
+
+Expected cost at 10x: each step sub-10ms; total cross-business customer history query well under 50ms.
+
+When pool_jobs and pest_treatments tables land, Step 3 fans out into a UNION ALL across operational tables filtered by business_id. The pattern stays the same; the additional cost is one indexed lookup per business type.
 
 ### Sc6. Read replica readiness
 
