@@ -1,8 +1,68 @@
-# Schema Rationale (v2 Draft)
+# Schema Rationale (v3, locked)
 
-_Companion to `specs/01-schema.ts`. Captures design reasoning, ISN deviations, and decisions awaiting Phase 2/3 validation._
+_Companion to `specs/01-schema.ts`. Captures design reasoning, ISN deviations, and architectural decisions made during the v3 review cycle._
 
-_Status: DRAFT, in progress. Sections fill in as Phase 2 results land and Troy reviews._
+_Status: LOCKED 2026-04-27 alongside the schema (git tag `v3-schema-locked`). Subsequent updates land in additive sections rather than rewrites; the chronological journal below preserves the "why this came up when it came up" thread for future readers._
+
+## Table of contents
+
+1. [Architectural overview](#architectural-overview)
+2. [Source decisions](#source-decisions)
+3. [Soft-delete columns (added 2026-04-27)](#soft-delete-columns-added-2026-04-27-per-troys-directive)
+4. [Self-review pass 2026-04-27](#self-review-pass-2026-04-27-customers-properties-agencies-transaction_participants-services-technician_) (customers / properties / agencies / participants / services / technician)
+5. [Audit log review pass 2026-04-27](#audit_log-review-pass-2026-04-27)
+6. [Membership and permission triple, review pass 2026-04-27](#membership-and-permission-triple-review-pass-2026-04-27)
+7. [Inspections table conventions (review pass 2026-04-27)](#inspections-table-conventions-review-pass-2026-04-27)
+8. [Customer/property dedupe summary](#customerproperty-dedupe-summary-table)
+9. [Bill-to-closing workflow](#bill-to-closing-workflow-known-safe-house-pattern)
+10. [Future migration considerations](#future-migration-considerations)
+11. [Pending v2 schema deltas](#pending-v2-schema-deltas-from-phase-2-pilot-2026-04-26)
+12. [Cross-cutting design notes](#cross-cutting-design-notes)
+13. [Per-table rationale stubs](#rationale-per-table)
+14. [Open questions](#open-questions-tracked-here)
+
+## Architectural overview
+
+The v3 schema is built around three layered concerns. Each layer has its own isolation boundary and its own set of shared resources.
+
+### Layer 1: Account (top-level tenant)
+
+An `account` is the licensing tenant. Today there is one account, ours. The architecture is licensing-ready from the foundation, so future licensees become additional account rows without schema changes.
+
+A user belongs to exactly one account (Pattern 1). Cross-account leak is the most damaging failure mode in the system; row-level security at the database layer plus the INV-1 invariant in the security spec enforce isolation.
+
+### Layer 2: Business (operational unit within an account)
+
+Within an account, work happens inside `businesses`. Today our account has three: Safe House Property Inspections, HCJ Pool Services, Pest Heroes. Each is a row in `businesses` with a type discriminator (`inspection`, `pool`, `pest`). A business has its own users, services, technician availability, and operational records.
+
+A user can belong to multiple businesses within their account via `user_businesses`. Roles are per-business (`user_roles` keyed on user + business + role) so the same human can be `owner` at Safe House and `bookkeeper` at HCJ.
+
+### Layer 3: Customers, properties, transaction participants, agencies (shared within account)
+
+Real-world entities like customers, physical properties, real estate agents, and brokerages exist independently of which business serves them. They are scoped to an account but shared across that account's businesses, with junction tables (`customer_businesses`, `property_businesses`, `agency_businesses`) tracking which businesses have transacted with each entity. This unlocks cross-sell visibility (a Safe House customer is the same record HCJ would service if pool work came up) without duplicating PII.
+
+Transaction participants (realtors, transaction coordinators, escrow officers, lenders, attorneys) live alongside customers as a separate shared entity, distinct from "people who pay us" because their role in a deal is structural, not commercial.
+
+### Audit and security as cross-cutting concerns
+
+`audit_log` is the system-wide append-only journal, scoped to account. Every meaningful action produces an audit entry; reads of sensitive fields produce them too (security spec S5). Forensic correlation via `sessionId` and `requestId` lets us reconstruct a user's actions across an HTTP request and across a session.
+
+Row-level security policies on every account-scoped and business-scoped table enforce isolation at the database layer, not just in the application. Session-variable misconfigurations result in zero rows returned, the safe failure mode.
+
+### Soft-delete pattern
+
+Tables holding PII or operational history carry `deletedAt`, `deletedBy`, `deleteReason` columns and a `deleted_at_idx` index. Hard delete is reserved for retention jobs and explicit admin actions, both audit-logged.
+
+### Naming and modeling conventions
+
+- UUIDs for every primary key. No auto-increment integers.
+- All datetime columns are `timestamptz`.
+- Enum-shaped columns are `pgEnum` for DB-layer enforcement, with the trade that adding values requires a migration.
+- Account-scoped tables carry `account_id` directly. Operational tables inherit account scope through their FK chain rather than denormalizing.
+- Composite indexes on hot paths typically lead with `business_id`; cross-account queries are rare and explicit.
+- The existing Replit project's column-naming patterns (camelCase TS, snake_case SQL) are preserved.
+
+## Source decisions
 
 ## Source decisions
 
