@@ -6,12 +6,45 @@ _Status: DRAFT, in progress. Sections fill in as Phase 2 results land and Troy r
 
 ## Source decisions
 
-The schema follows from these decision documents:
+The schema follows from these decision documents and principle specs:
+
+- `specs/06-security-spec.md` (S1-S8 hard requirements; soft-delete in S4)
+- `specs/07-scalability-spec.md` (Sc1-Sc7)
+- `specs/08-multi-business-extensibility-spec.md` (M1-M6)
+
+If a section here conflicts with those, the principle specs win. This file explains how the constraints land in column-level shape.
+
+Decision documents:
 
 - `decisions/2026-04-26-design-decisions.md` (D1-D5)
 - `decisions/2026-04-26-multi-business-architecture.md` (Pattern B, multi-business)
 
 If a section here conflicts with those, the decision docs win. This file explains how the decisions land in column-level shape.
+
+## Soft-delete columns (added 2026-04-27 per Troy's directive)
+
+Following security spec S4, the following tables now carry `deletedAt timestamptz`, `deletedBy uuid references users(id)`, and `deleteReason text`:
+
+- `customers`
+- `properties`
+- `transaction_participants`
+- `inspections` (distinct from operational `cancelledAt`; cancellation is a workflow state, deletion is an admin action)
+- `agencies` (kept the `active` boolean as operational hide, deletedAt is the admin-removed signal)
+
+Indexes added: `<table>_deleted_at_idx` on each, since the most common read pattern is `WHERE deleted_at IS NULL`.
+
+Tables that use `status` as a soft-delete signal instead (no deletedAt columns):
+
+- `businesses` (`status='inactive'`)
+- `users` (`status='inactive'`)
+- `user_businesses` (`status='inactive'`)
+
+Reasoning: these tables hold structural records rather than direct PII rows. The status flag is sufficient and matches existing patterns. We can convert them to deletedAt columns later if a use case requires it without breaking schema, since the operational state moves into a new column rather than removing one.
+
+Tables that explicitly do NOT soft-delete:
+
+- `user_roles`: role grants/revocations are mutations recorded in audit_log; no soft-delete on the row itself.
+- `audit_log`: append-only by design. Hard delete only via configured retention job.
 
 ## Pending v2 schema deltas (from Phase 2 pilot, 2026-04-26)
 

@@ -312,12 +312,18 @@ export const customers = pgTable("customers", {
 
   status: varchar("status", { length: 50 }).default("active").notNull(),
 
+  // Soft-delete (security spec S4)
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: uuid("deleted_by").references(() => users.id),
+  deleteReason: text("delete_reason"),                               // PII: notes (free text, may reference customer)
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byEmail: index("customers_email_idx").on(t.email),
   byNameLower: index("customers_name_lower_idx").on(sql`lower(${t.displayName})`),
   byIsnSource: uniqueIndex("customers_isn_source_idx").on(t.isnSourceId).where(sql`${t.isnSourceId} IS NOT NULL`),
+  byDeletedAt: index("customers_deleted_at_idx").on(t.deletedAt),    // hot path: filter `deletedAt IS NULL` on most reads
 }));
 
 // customer_businesses junction
@@ -385,12 +391,18 @@ export const properties = pgTable("properties", {
   // so dedup can be opt-in.
   // GAP: pick strategy when we draft 04-field-mapping.md.
 
+  // Soft-delete (security spec S4)
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: uuid("deleted_by").references(() => users.id),
+  deleteReason: text("delete_reason"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byZip: index("properties_zip_idx").on(t.zip),
   byCityState: index("properties_city_state_idx").on(t.city, t.state),
   byAddrLower: index("properties_addr_lower_idx").on(sql`lower(${t.address1})`, t.zip),
+  byDeletedAt: index("properties_deleted_at_idx").on(t.deletedAt),
 }));
 
 // property_businesses junction
@@ -462,19 +474,25 @@ export const transactionParticipants = pgTable("transaction_participants", {
 
   status: varchar("status", { length: 50 }).default("active").notNull(),
 
+  // Soft-delete (security spec S4)
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: uuid("deleted_by").references(() => users.id),
+  deleteReason: text("delete_reason"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byEmail: index("tparticipants_email_idx").on(t.email),
   byAgency: index("tparticipants_agency_idx").on(t.agencyId),
   byIsnSource: uniqueIndex("tparticipants_isn_source_idx").on(t.isnSourceId).where(sql`${t.isnSourceId} IS NOT NULL`),
+  byDeletedAt: index("tparticipants_deleted_at_idx").on(t.deletedAt),
 }));
 
 // =============================================================================
 // Agencies (shared with junction)
 // =============================================================================
 // Table: agencies
-// Security:      PII (corporate contact info, not heavy personal). Encryption not required at column level. Soft-delete: yes via `active=false` plus optional deletedAt. RLS: shared, API enforces business scoping through agency_businesses.
+// Security:      PII (corporate contact info, not heavy personal). Encryption not required at column level. Soft-delete: yes via deletedAt/deletedBy/deleteReason; `active=false` is a separate operational hide flag. RLS: shared, API enforces business scoping through agency_businesses.
 // Scalability:   No partition key. Index on lower(name). Expected row count at 10x: ~5,000 brokerages and similar.
 // Multi-business: SHARED with agency_businesses junction.
 export const agencies = pgTable("agencies", {
@@ -491,10 +509,17 @@ export const agencies = pgTable("agencies", {
 
   isnSourceId: uuid("isn_source_id").unique(),
 
+  // Soft-delete (security spec S4). The `active` flag remains for operational hide,
+  // but deletedAt is the hard signal for "removed from the system."
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: uuid("deleted_by").references(() => users.id),
+  deleteReason: text("delete_reason"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byNameLower: index("agencies_name_lower_idx").on(sql`lower(${t.name})`),
+  byDeletedAt: index("agencies_deleted_at_idx").on(t.deletedAt),
 }));
 
 // Table: agency_businesses
@@ -667,6 +692,14 @@ export const inspections = pgTable("inspections", {
   // dispatcher | realtor_portal | client_booking | phone | email | api
   sourceParticipantId: uuid("source_participant_id").references(() => transactionParticipants.id),
 
+  // Soft-delete (security spec S4). Distinct from `cancelledAt` which is the
+  // operational "this inspection was cancelled" state. `deletedAt` is the
+  // administrative "this row was removed from active queries" state. ISN
+  // overloads these via `deleteddatetime`; we keep them separate.
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: uuid("deleted_by").references(() => users.id),
+  deleteReason: text("delete_reason"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   createdBy: uuid("created_by").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -679,6 +712,7 @@ export const inspections = pgTable("inspections", {
   byCustomer: index("inspections_customer_idx").on(t.customerId),
   byProperty: index("inspections_property_idx").on(t.propertyId),
   byBizScheduled: index("inspections_biz_scheduled_idx").on(t.businessId, t.scheduledAt),
+  byDeletedAt: index("inspections_deleted_at_idx").on(t.deletedAt),
 }));
 
 // Multi-inspector orders. One row per assigned inspector beyond the lead.
