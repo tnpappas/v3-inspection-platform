@@ -420,12 +420,75 @@ After Step 1 user import, apply known first-day permission overrides:
 
 ---
 
-## Idempotency notes
+## Idempotency
 
-- **Step 0:** fully idempotent (ON CONFLICT DO NOTHING throughout).
-- **Steps 1–4:** designed for a clean-run model. Re-running requires clearing the target tables first (truncate in dependency order) OR adding ON CONFLICT logic per entity using ISN source IDs as natural keys. Recommendation: run against a fresh DB; use ISN source IDs for conflict detection on re-run.
-- **Step 5–6:** idempotent via `audit_log.requestId` dedup if `requestId` is set consistently (use a hash of the ISN order id + event timestamp).
-- **Step 7:** idempotent; updates are computed from immutable imported data.
+Every migration step is designed to be **safe to re-run any number of times without duplicates or data corruption.** If a step fails halfway, re-run from the failing step. No manual cleanup required.
+
+### Upsert pattern for all entity imports (Steps 1-4)
+
+For every entity import (`users`, `customers`, `transaction_participants`, `agencies`, `properties`, `inspections`), the script:
+
+1. Looks up any existing row by `isnSourceId` within the account:
+   ```ts
+   const existing = await db.query.inspections.findFirst({
+     where: and(
+       eq(inspections.businessId, safeHouseBusinessId),
+       eq(inspections.isnSourceId, isnOrder.id)
+     )
+   });
+   ```
+2. If found: compute a patch (fields that actually changed). If the patch is non-empty, update and write an `audit_log` entry with `action='update'`, `changes={before, after}`. If patch is empty, skip (already current).
+3. If not found: insert and write an `audit_log` entry with `action='create'`.
+
+This means running the migration twice on the same data is identical to running it once. Updated fields converge; unchanged fields are skipped.
+
+### Audit log writes (Step 5)
+
+Each ISN history event maps to one `audit_log` row. Dedup key: `sha256(isn_order_id + '|' + event.when)`, stored as `audit_log.requestId`. Insert with:
+
+```sql
+INSERT INTO audit_log (..., request_id) VALUES (..., :dedup_key)
+ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING;
+```
+
+This requires the `audit_log.requestId` to be unique-where-not-null. It already is via the `byRequest` partial index on `request_id IS NOT NULL`.
+
+### Reschedule history (Step 6)
+
+Natural dedup key: `(inspection_id, previous_scheduled_at, new_scheduled_at)`. Migration inserts with:
+
+```sql
+INSERT INTO reschedule_history (...)
+ON CONFLICT (inspection_id, previous_scheduled_at, new_scheduled_at) DO NOTHING;
+```
+
+This requires a unique index on that composite. If migration prep reveals collisions (rare: two reschedules to the same timestamps), fall back to Option A: add an `isn_source_key varchar(255)` column to `reschedule_history` (schema v3.1.2 additive change). Flag the issue and decide during migration prep.
+
+### Post-pass derivations (Step 7)
+
+UPDATE statements, inherently idempotent. Running twice sets the same derived value both times.
+
+### Permission overrides (Step 8)
+
+```sql
+INSERT INTO user_permission_overrides (...)
+ON CONFLICT (user_id, business_id, permission_key, group_key, effect) DO NOTHING;
+```
+
+Already idempotent via the composite PK.
+
+### Re-run behavior summary
+
+| What happens if you re-run a step | Effect |
+|---|---|
+| Entity already exists with same data | No-op (patch is empty) |
+| Entity already exists with updated data from ISN | Update applied, audit_log entry written |
+| Entity does not exist | Insert + audit_log entry |
+| Audit log event already imported | Skipped (ON CONFLICT DO NOTHING on requestId) |
+| Reschedule history row already exists | Skipped (ON CONFLICT DO NOTHING on natural key) |
+| Permission override already exists | Skipped (ON CONFLICT DO NOTHING on composite PK) |
+
+No manual cleanup, no table truncation, no re-sequencing required.
 
 ---
 
