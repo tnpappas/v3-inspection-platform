@@ -109,3 +109,28 @@ The pattern, with `/agents` (issue #6) and `/orders` (this issue), is that ISN's
 A vendor charging >$12K/year, raising fees, ignoring improvement requests, and quietly courting our client data is also publishing API documentation with wrong server URLs, truncated descriptions, duplicate endpoints, and parameter-location bugs. Four basic hygiene failures discovered in the first hour of looking. This is not a platform with a quality bar.
 
 We add observations here as we find them.
+
+## 10. /insuranceagents endpoint returns status:error
+
+Observed during Phase 3 crawl 2026-04-28:
+
+`GET /insuranceagents` returns HTTP 200 but:
+
+```json
+{"status": "error", "message": "missing or invalid action specified"}
+```
+
+The endpoint is published in the OpenAPI spec under the `insuranceagents` tag and shows 4 operations (list, search, lookup, get-by-id). All return status:error. The endpoint is broken in production. Safe House has zero insurance agent records, which is consistent with the broken endpoint (or caused it).
+
+## 11. /calendar/availableslots returns empty response; differs from /availableslots
+
+Observed during Phase 3 crawl 2026-04-28:
+
+`/calendar/availableslots` and `/availableslots` have identical parameters in the spec ("Obtain all available slots") but different production behavior:
+
+- `/availableslots` returns the full envelope: `{ status, count, zip, daysahead, offset, services, slots }`
+- `/calendar/availableslots` returns only: `{ status, message }` — no slot data, no count
+
+They are NOT aliases. Both returned 0 slots (count=0) for Troy's inspector user, likely because ISN requires technician_hours configuration before the slot algorithm runs — which Safe House never configured (relied on dispatcher judgment, not the ISN slot tool).
+
+This means ISN's `availableslots` endpoint was never actually used in Safe House's workflow. The v3 slot algorithm is a fresh implementation, not a port from ISN.
