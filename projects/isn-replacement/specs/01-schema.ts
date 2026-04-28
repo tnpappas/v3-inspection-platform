@@ -1,5 +1,5 @@
 /**
- * 01-schema.ts (v3.1.2, licensing-ready + RBAC + system user + reschedule dedup) — LOCKED 2026-04-27
+ * 01-schema.ts (v3.1.3, gateCode + services fields + inspection_notes) — LOCKED 2026-04-28
  *
  * STATUS: LOCKED. Canonical schema for the rebuild. Subsequent changes follow
  * the migration-plan workflow (additive migrations, backwards-compatible
@@ -17,6 +17,14 @@
  * (inspection_id, previous_scheduled_at, new_scheduled_at). Enables idempotent
  * migration re-runs via ON CONFLICT DO NOTHING. Also defense-in-depth against
  * accidental duplicate reschedule entries from any source. Additive only.
+ * v3.1.3 additions (2026-04-28, Phase 4 audit): Three additive changes.
+ *   (a) properties.gate_code varchar(50): ISN order.gatecode; inspector property access code.
+ *   (b) services table: isnSid int, ancillary bool, visibleToDispatcher bool,
+ *       visibleOnlineBooking bool, isPac bool, modifiers jsonb, questions jsonb.
+ *       Full service catalog from /services (undocumented ISN endpoint, Phase 4).
+ *   (c) inspection_notes table (new): ISN order notes migrated from /order/notes/{id}.
+ *       author_id nullable for system notes. is_internal gates view.inspection.internal_notes.
+ *       noteType: dispatcher | system | inspector.
  * Predecessor drafts preserved as `01-schema.v1.draft.ts.superseded` and
  * `01-schema.v2.draft.ts.superseded` for design history.
  *
@@ -268,6 +276,7 @@ export const AUDIT_ENTITY_TYPES = [
   "inspection_inspector",
   "inspection_participant",
   "inspection_service",
+  "inspection_note",          // v3.1.3
   "reschedule_history",
   // synthetic / non-row events
   "login_attempt",         // pre-auth events with no entity_id
@@ -858,6 +867,7 @@ export const properties = pgTable("properties", {
   foundation: varchar("foundation", { length: 100 }),                // controlled vocabulary; ISN UUID translated at migration
   occupancy: varchar("occupancy", { length: 100 }),
   propertyType: varchar("property_type", { length: 100 }),
+  gateCode: varchar("gate_code", { length: 50 }),                     // v3.1.3: property gate code for inspector access (ISN order.gatecode)
 
   notes: text("notes"),
 
@@ -1056,6 +1066,14 @@ export const services = pgTable("services", {
   active: boolean("active").default(true).notNull(),
 
   isnSourceId: uuid("isn_source_id"),
+  // v3.1.3: ISN service additions (Phase 4 /services deep crawl 2026-04-28)
+  isnSid: integer("isn_sid"),                                        // ISN's stable integer service ID (sid); separate from isnSourceId UUID
+  ancillary: boolean("ancillary").default(false).notNull(),          // Add-on service (true) vs. primary inspection type (false)
+  visibleToDispatcher: boolean("visible_to_dispatcher").default(true).notNull(),   // Show on dispatcher booking form
+  visibleOnlineBooking: boolean("visible_online_booking").default(false).notNull(), // Show on client-facing online booking
+  isPac: boolean("is_pac").default(false).notNull(),                 // Pay-at-Close convenience service flag
+  modifiers: jsonb("modifiers"),                                     // Price modifier rules array (ISN fee modifiers; nullable — no active samples observed)
+  questions: jsonb("questions"),                                     // Booking questions array; shape: [{id, type: 'boolean'|'text', question: string}]
 
   // Audit columns
   createdBy: uuid("created_by").notNull().references(() => users.id),
@@ -1068,6 +1086,7 @@ export const services = pgTable("services", {
   byBusinessActive: index("services_business_active_idx").on(t.businessId, t.active),
   byBusinessCategory: index("services_business_category_idx").on(t.businessId, t.category).where(sql`${t.category} IS NOT NULL`),
   byBusinessIsnSource: uniqueIndex("services_business_isn_source_unique").on(t.businessId, t.isnSourceId).where(sql`${t.isnSourceId} IS NOT NULL`),
+  byIsnSid: index("services_isn_sid_idx").on(t.isnSid).where(sql`${t.isnSid} IS NOT NULL`),
 }));
 
 // =============================================================================
@@ -1337,6 +1356,33 @@ export const inspectionServices = pgTable("inspection_services", {
   byInspection: index("inspection_services_inspection_idx").on(t.inspectionId),
 }));
 
+// =============================================================================
+// Inspection notes (v3.1.3)
+// =============================================================================
+// Table: inspection_notes
+// Security:      Soft-delete: NO (notes are auditable; hard-delete only via retention policy).
+//                is_internal=true rows gated by view.inspection.internal_notes permission (existing).
+//                is_internal=false rows visible to anyone with view.inspection.
+//                author_id is nullable: system-generated notes (payment events, status changes)
+//                have no human author. RLS: account-and-business-scoped via parent inspection.
+// Scalability:   Indexes on (inspection_id), (inspection_id, created_at). Expected row count at
+//                10x: ~500,000/year per account (avg ~5 notes per inspection, 100k inspections/yr).
+// Multi-business: SCOPED via parent inspections.
+export const inspectionNotes = pgTable("inspection_notes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  inspectionId: uuid("inspection_id").notNull().references(() => inspections.id, { onDelete: "cascade" }),
+  authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }), // null for system notes
+  noteType: varchar("note_type", { length: 20 }).notNull(),          // 'dispatcher' | 'system' | 'inspector'
+  content: text("content").notNull(),
+  isInternal: boolean("is_internal").default(true).notNull(),        // false = visible to all with view.inspection; true = requires view.inspection.internal_notes
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  isnSourceId: uuid("isn_source_id"),                                // source ISN note ID for dedup (notes don't have stable IDs in ISN; nullable)
+}, (t) => ({
+  byInspection: index("inspection_notes_inspection_idx").on(t.inspectionId),
+  byInspectionDate: index("inspection_notes_inspection_date_idx").on(t.inspectionId, t.createdAt),
+  byAuthor: index("inspection_notes_author_idx").on(t.authorId).where(sql`${t.authorId} IS NOT NULL`),
+}));
+
 // Reschedule history (D3: scheduled_at-based)
 // Table: reschedule_history
 // Security:      No direct PII. RLS: account-and-business-scoped via parent inspections FK.
@@ -1437,7 +1483,7 @@ export const auditLog = pgTable("audit_log", {
       'permission','permission_group','permission_group_member','role_permission','user_permission_override',
       'customer','property','customer_business','property_business','customer_property','transaction_participant','agency','agency_business',
       'service','technician_hours','technician_time_off','technician_zip','technician_service_duration',
-      'inspection','inspection_inspector','inspection_participant','inspection_service','reschedule_history',
+      'inspection','inspection_inspector','inspection_participant','inspection_service','inspection_note','reschedule_history',
       'login_attempt','session','export_job','system'
     )`
   ),

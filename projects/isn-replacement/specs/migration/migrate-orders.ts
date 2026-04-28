@@ -222,9 +222,38 @@ async function main() {
     if (coerceIsnBoolean(order.osorder as string) && order.osscheduleddatetime) {
       customFields["online_scheduled_at"] = parseIsnDatetime(order.osscheduleddatetime as string)?.toISOString() ?? null;
     }
+
+    // Cost center → territory name (Phase 4: two territories, A and B)
     if (order.costcentername) {
       customFields["territory"] = order.costcentername;
     }
+
+    // Refer reason (Phase 4): resolve UUID to text via controls
+    // The FoundationType control also embeds the refer reason text in its options
+    const foundationControl = ((order.controls as Array<{ type?: string; value?: string }>) ?? [])
+      .find((c) => c.type === "FoundationType");
+    const referReasonText = ((order.controls as Array<{ type?: string; value?: string }>) ?? [])
+      .find((c) => c.type === "ReferReason")?.value ?? null;
+
+    // Foundation type: read from FoundationType control value (more reliable than UUID map)
+    const foundationTypeRaw = foundationControl?.value;
+    const foundationType = foundationTypeRaw
+      ? foundationTypeRaw.toLowerCase().replace(/[^a-z]/g, "_").replace(/_+/g, "_")
+      : null; // e.g. "Crawlspace" → "crawl_space" (post-process in migrate-properties)
+    if (foundationType) customFields["isn_foundation_type"] = foundationControl?.value ?? null;
+
+    // Complaint data from controls (Phase 4: post-QA tracking)
+    const complaintControls = ((order.controls as Array<{ type?: string; name?: string; value?: string }>) ?? [])
+      .filter((c) => c.name?.toLowerCase().includes("complaint") && c.value && !c.value.startsWith("---") && c.value !== "n/a");
+    if (complaintControls.length > 0) {
+      customFields["complaints"] = complaintControls.map((c) => ({ field: c.name, value: c.value }));
+    }
+
+    // Delivery flags (Phase 4)
+    customFields["send_email_events"] = coerceIsnBoolean(order.sendemailevents as string) ?? true;
+    customFields["send_sms_events"] = coerceIsnBoolean(order.sendsmsevents as string) ?? true;
+    if (coerceIsnBoolean(order.ignoresignaturefordelivery as string)) customFields["ignore_sig_for_delivery"] = true;
+    if (coerceIsnBoolean(order.ignorespaymentfordelivery as string)) customFields["ignore_pay_for_delivery"] = true;
 
     // Derive scheduled_at
     const rawDatetime = order.datetime as string | null;
@@ -240,6 +269,29 @@ async function main() {
     const source = deriveSourceFromIsnOrder(order);
 
     const year = scheduledAtDate?.getFullYear() ?? new Date().getFullYear();
+
+    // Resolve audit trail user IDs (Phase 4: full audit trail from extended order fetch)
+    const createdByUserId = order.createdby
+      ? await lookupUserByIsnId(order.createdby as string, ACCOUNT_ID) ?? systemUserId
+      : systemUserId;
+    const completedByUserId = order.completedby
+      ? await lookupUserByIsnId(order.completedby as string, ACCOUNT_ID)
+      : null;
+    const scheduledByUserId = order.scheduledby
+      ? await lookupUserByIsnId(order.scheduledby as string, ACCOUNT_ID)
+      : null;
+    const cancelledByUserId = order.canceledby
+      ? await lookupUserByIsnId(order.canceledby as string, ACCOUNT_ID)
+      : order.deletedby
+      ? await lookupUserByIsnId(order.deletedby as string, ACCOUNT_ID)
+      : null;
+    const confirmedByUserId = order.confirmedby
+      ? await lookupUserByIsnId(order.confirmedby as string, ACCOUNT_ID)
+      : null;
+
+    // Resolve refer reason text (Phase 4)
+    // Already extracted above as referReasonText from controls; store on customFields
+    if (referReasonText) customFields["refer_reason"] = referReasonText;
 
     // Upsert inspection
     const existing = await db.query.inspections?.findFirst({
@@ -290,14 +342,22 @@ async function main() {
         propertyId: propertyId ?? null,
         customFields,
         source,
+        // Audit trail (Phase 4: from extended order fetch)
         cancelledAt: order.deleteddatetime ? parseIsnDatetime(order.deleteddatetime as string) : null,
-        cancelledBy: order.deletedby ? await lookupUserByIsnId(order.deletedby as string, ACCOUNT_ID) : null,
+        cancelledBy: cancelledByUserId,
         confirmedAt: order.confirmeddatetime ? parseIsnDatetime(order.confirmeddatetime as string) : null,
-        initialCompletedAt: order.initialcompleteddatetime ? parseIsnDatetime(order.initialcompleteddatetime as string) : null,
+        confirmedBy: confirmedByUserId,
         completedAt: order.completeddatetime ? parseIsnDatetime(order.completeddatetime as string) : null,
+        completedBy: completedByUserId,
+        scheduledAt: scheduledAt, // overwrite: use createddatetime for actual creation time
+        isnCreatedAt: order.createddatetime ? parseIsnDatetime(order.createddatetime as string) : null,
+        isnScheduledAt: order.scheduleddatetime ? parseIsnDatetime(order.scheduleddatetime as string) : null,
         rescheduleCount: 0,
-        createdBy: systemUserId,
+        createdBy: createdByUserId,
         updatedBy: systemUserId,
+        // v3.1.3 new fields
+        reportNumber: normalizeIsnString(order.reportnumber as string),
+        referReasonText: normalizeIsnString(order.referreason as string), // UUID; resolve in post-pass via /referreasons lookup
       }).returning();
       v3InspectionId = created.id;
       imported++;

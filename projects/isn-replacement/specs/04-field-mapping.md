@@ -331,7 +331,7 @@ else: 'scheduled'  # fallback
 | `sellersagent` (UUID) | `inspection_participants` row, `role_in_transaction='listing_agent'` | |
 | `escrowofficer`, `insuranceagent`, `policyholder`, `policynumber` | (dropped, all empty at Safe House) | |
 | `buyersagentcontactnotes`, `sellersagentcontactnotes` | (dropped, all empty) | Notes on participants belong on `transaction_participants.notes`, not on the inspection. |
-| `referreason` | `inspections.customFields.referReason` | UUID into a lookup table we do not migrate; preserve the UUID for traceability. |
+| `referreason` | `inspections.referReasonText` (v3.1.3) | UUID resolved to text via `/referreasons` at migration time (e.g. "Google Search"). Stored as string; no FK table needed. |
 | `referredreason` | (dropped) | Always empty; likely a typo'd duplicate of `referreason`. |
 
 ### Property (now lives on `properties` shared table)
@@ -350,10 +350,11 @@ The order's property metadata maps into a `properties` row, with `inspections.pr
 | `latitude` | `latitude` | |
 | `longitude` | `longitude` | |
 | `mapurl` | (dropped) | Recomputed from lat/long in v3 if needed. |
-| `gatecode`, `majorcrossstreets` | (dropped, always empty) | |
+| `gatecode` | `properties.gateCode` (v3.1.3) | Gate/keypad code for gated properties. NOT always empty — Phase 4 confirmed field exists and is populated on some orders. Migrated to `properties` (property attribute, not order-specific). |
+| `majorcrossstreets` | (dropped) | Always empty in all sampled data. |
 | `squarefeet` | `squareFeet` | ISN type is string (e.g., `"1712"`); coerce to integer. |
 | `yearbuilt` | `yearBuilt` | Same coercion. |
-| `foundation` (UUID) | `foundation` (varchar) | UUID translated to controlled vocabulary string at migration time via foundation lookup table. |
+| `foundation` (UUID) | `foundation` (varchar) | Phase 4: preferred translation via `FoundationType` control `value` (human-readable string directly). UUID map fallback. Options confirmed: `'Crawlspace'` → `'crawl_space'`, `'Slab'` → `'slab'`. |
 | `propertyoccupied` | `occupancy` | Map: `"yes"`→`'occupied'`, `"no"`→`'vacant'`. |
 | `utilitieson` | `inspections.customFields.utilitiesOn` | Operational hint; not a property attribute. Preserved on the inspection. |
 | `salesprice` | `inspections.customFields.salesPrice` | Always 0 in pilot; preserve where populated. |
@@ -385,7 +386,8 @@ The order's property metadata maps into a `properties` row, with `inspections.pr
 | ISN field | v3 column | Notes |
 |---|---|---|
 | `controls[]` (137 items) | `inspections.customFields` (filtered) | See custom-fields classification below. |
-| `costcenter`, `costcentername` | `inspections.customFields.territory` | Territory model thin (only "Territory A" observed); preserve as customFields hint until territories table goes live. |
+| `costcenter` (UUID) | (dropped) | ISN internal UUID; not useful post-migration. |
+| `costcentername` | `inspections.customFields.territory` | Phase 4 confirmed two territories: "Territory A" and "Territory B". Stored as string in `customFields`. No separate lookup table. |
 
 ### Custom fields classification (controls[] split)
 
@@ -598,3 +600,42 @@ function translateIsnFoundation(uuid: string | null): string | null;
 5. ~~Outsource workflow preservation~~ — RESOLVED 2026-04-27. `os` is the Online Scheduler feature, not outsourcing. The 15-sample pilot was misread initially; correct distribution is roughly 47% `osorder=yes` (online-booked) and 53% `osorder=no` (dispatcher-booked). Mapping locked: `osorder='yes'` → `source='realtor_portal'`; `osorder='no'` → `source='dispatcher'`. `osscheduleddatetime` → `customFields.onlineScheduledAt`. Account-agnostic; future licensees with different volume mixes use the same logic. `outsourceamount` on fees stays mapped as currently described (preserved as a note when nonzero; zero everywhere in sampled data).
 
 6. **`utilitieson`, `propertyoccupied`, `salesprice`** placement. These could either live on `properties` (semantic argument: they describe the property) or on `inspections` (operational argument: they describe the property at the time of inspection, which can change). Today they go on `inspections.customFields`. Reconsider when those fields prove operationally important.
+
+---
+
+## v3.1.3 additions — Phase 4 audit (2026-04-28)
+
+### Order notes → `inspection_notes` table
+
+Phase 4 discovered `/order/notes/{id}` (undocumented ISN endpoint). Notes are NOT stored in `customFields` — they get their own table `inspection_notes` (v3.1.3). See schema rationale for reasoning.
+
+| ISN field | `inspection_notes` column | Notes |
+|---|---|---|
+| `dte` | `created_at` | ISN local time (Pacific); converted to UTC at migration |
+| `user.id` | `author_id` | Resolved via `users.isn_source_id` lookup; null for system notes |
+| `user` (empty array `[]`) | `author_id = null`, `note_type = 'system'` | ISN system notes have no author object |
+| `text` | `content` | Note text |
+| `temp` | (dropped) | All observed values were `false`; no migration value |
+
+`note_type` derivation:
+- `user` is an object with `id` → `'dispatcher'`
+- `user` is `[]` (empty array) → `'system'`
+- (future) inspector-created notes → `'inspector'`
+
+`is_internal` default:
+- `system` notes → `true` (payment events etc. are staff-facing)
+- `dispatcher` notes → `false` (shared with inspection record; visible to all with `view.inspection`)
+
+### Refer reason text
+
+`order.referreason` is a UUID. Resolved at migration time via `/referreasons` endpoint to human-readable text (e.g., "Google Search", "Referred By Friend"). Stored as `inspections.referReasonText varchar(200)`. The `/referreasons` lookup is loaded once per migration run and cached in `helpers.loadReferReasonMap()`.
+
+### Cost center confirmed
+
+Two territories: `"Territory A"` and `"Territory B"`. Stored as `inspections.customFields.territory` (string). No separate lookup table. Both were confirmed live via Phase 4 `/costcenters` endpoint.
+
+### Open questions resolved
+
+- Q3 (foundation lookup): RESOLVED. `/services` `FoundationType` control options confirm only Slab and Crawlspace. FOUNDATION_MAP confirmed correct.
+- Q1 (agency deep crawl): RESOLVED Phase 3. Agency shape fully documented.
+- Q2 (clients deep crawl): RESOLVED Phase 3. Client field names corrected (first/last/display/email).

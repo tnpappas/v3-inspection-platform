@@ -399,3 +399,45 @@ export function logError(step: string, message: string, err?: unknown): void {
   const ts = new Date().toISOString();
   console.error(`[${ts}] [${step}] ERROR: ${message}`, err ?? "");
 }
+
+// ============================================================================
+// Phase 4: Refer reason lookup (undocumented /referreasons endpoint)
+// ============================================================================
+
+interface ISNReferReason {
+  id: string;
+  reason: string;
+  show: string;
+}
+
+/** Cache: loaded once per migration run, keyed by ISN UUID. */
+let _referReasonCache: Map<string, string> | null = null;
+
+/**
+ * Load the full /referreasons list from ISN and return a UUID→text map.
+ * Cached for the process lifetime. Falls back to empty map on error.
+ *
+ * Usage in migrate-orders.ts:
+ *   const rrMap = await loadReferReasonMap();
+ *   const text = rrMap.get(order.referreason as string) ?? null;
+ */
+export async function loadReferReasonMap(): Promise<Map<string, string>> {
+  if (_referReasonCache) return _referReasonCache;
+  try {
+    const resp = await isnGet<{ referreasons: ISNReferReason[] }>("/referreasons");
+    _referReasonCache = new Map(
+      (resp.referreasons ?? []).map((r) => [r.id, r.reason.trim()])
+    );
+    log("helpers", `Loaded ${_referReasonCache.size} refer reasons from ISN`);
+  } catch (err) {
+    logError("helpers", "Failed to load /referreasons; referReasonText will be null", err);
+    _referReasonCache = new Map();
+  }
+  return _referReasonCache;
+}
+
+/** Cost center name normalization (Phase 4: 2 territories). */
+export function normalizeCostCenterName(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return raw.trim().replace(/\s+/g, " ");
+}

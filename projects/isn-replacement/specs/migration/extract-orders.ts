@@ -74,7 +74,7 @@ async function main() {
   for (let i = 0; i < toFetch.length; i++) {
     const id = toFetch[i];
     const resp = await isnGetThrottled<{ order: Record<string, unknown> }>(
-      `/order/${id}?withallcontrols=true&withpropertyphoto=false`
+      `/order/${id}?withallcontrols=true&withpropertyphoto=true`  // Phase 4: both flags required for full 98-field record
     ).catch(() => null);
 
     if (!resp?.order) {

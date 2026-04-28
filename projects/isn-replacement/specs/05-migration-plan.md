@@ -1,8 +1,8 @@
 # Migration Plan
 
-_Status: LOCKED 2026-04-28. Companion to `specs/01-schema.ts` (v3.1.2), `specs/04-field-mapping.md`, and `specs/02-api-contract.yaml`._
+_Status: LOCKED 2026-04-28, updated 2026-04-28 (v3.1.3). Companion to `specs/01-schema.ts` (v3.1.3), `specs/04-field-mapping.md`, and `specs/02-api-contract.yaml`._
 
-This plan covers the full migration from ISN (Inspection Support Network) to the v3.1.1 schema. It assumes an empty target database with the v3.1.1 schema already applied (Option A, per Troy's directive 2026-04-27 16:56 UTC).
+This plan covers the full migration from ISN (Inspection Support Network) to the v3.1.3 schema. It assumes an empty target database with the v3.1.1 schema already applied (Option A, per Troy's directive 2026-04-27 16:56 UTC).
 
 ---
 
@@ -407,16 +407,17 @@ After Step 1 user import, apply known first-day permission overrides:
 
 | Step | Script | What | Dependencies |
 |---|---|---|---|
-| 0 | `seed.ts` | Seed reference data + account scaffolding. Writes `migration/.env.migration`. | Empty DB with v3.1.2 schema |
-| 0.5 | `migrate-services.ts` | Import ISN ordertypes and fee catalog as v3 services. | Step 0 |
-| 1 | `migrate-users.ts` | User audit + import with roles and implicit denies | Step 0 |
-| 2 | `migrate-contacts.ts` | Agencies, customers, transaction_participants. Checkpoint-resumable for agents (set RESUME=true). | Step 0, Step 1 |
-| 2.5 | `extract-orders.ts` | Pull all order details from ISN to `migration/orders-full.json`. Set RESUME=true to continue interrupted run. | ISN API access |
-| 3 | `migrate-properties.ts` | Property dedup + import from `orders-full.json` | Step 0, Step 2.5 |
-| 4 | `migrate-orders.ts` | Order migration from `orders-full.json`: inspections, line items, participants. Archives old cancellations. | Steps 0.5, 1, 2, 3 |
-| 5+6 | `migrate-history.ts` | Audit log import + reschedule history reconstruction | Step 4 |
-| 7 | (inline) | Post-pass derivations (primaryRole, lastActivityAt) | Steps 4, 5+6 |
-| 8 | (manual) | Day-one permission overrides | Step 1 |
+| 0 | `seed.ts` | Seed reference data + account scaffolding. Writes `migration/.env.migration`. | Empty DB with v3.1.3 schema |
+| 0.5 | `migrate-services.ts` | Import from `/services` (undocumented, 20 rich records) + `/ordertypes/` fallback. v3.1.3 fields. | Step 0 |
+| 1 | `migrate-users.ts` | User audit + import with roles and implicit denies. | Step 0 |
+| 2 | `migrate-contacts.ts` | Agencies, customers, transaction_participants. Checkpoint-resumable for agents (RESUME=true). | Step 0, Step 1 |
+| 2.5 | `extract-orders.ts` | Pull all order details with `?withallcontrols=true&withpropertyphoto=true`. Output: `migration/orders-full.json`. RESUME=true supported. | ISN API access |
+| 3 | `migrate-properties.ts` | Property dedup + import from `orders-full.json`. Populates `gateCode` (v3.1.3). Foundation from `FoundationType` control value. | Step 0, Step 2.5 |
+| 4 | `migrate-orders.ts` | Order migration: inspections, line items, participants, full audit trail (`createdBy`, `completedBy`, etc.), `costCenterName`, complaints. | Steps 0.5, 1, 2, 3 |
+| 4.5 | `migrate-notes.ts` | Pull `/order/notes/{id}` per inspection; import dispatcher + system notes to `inspection_notes` (v3.1.3). | Step 4 |
+| 5+6 | `migrate-history.ts` | ISN audit log import + reschedule history reconstruction. | Step 4 |
+| 7 | (inline) | Post-pass derivations: `primaryRole`, `lastActivityAt`, `referReasonText` from `/referreasons` lookup. | Steps 4, 4.5, 5+6 |
+| 8 | (manual) | Day-one permission overrides. | Step 1 |
 | Validation | `validate-migration.ts` | Full validation pass — 20+ checks. | All steps complete |
 
 **Environment:** Source `migration/.env.migration` (produced by `seed.ts`) before running all subsequent scripts:

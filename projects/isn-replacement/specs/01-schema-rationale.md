@@ -739,3 +739,43 @@ If a property attribute proves to be high-cardinality, growing, and queried ofte
 3. Generated column for `inspections.scheduledEndAt`: support varies by Drizzle version. Either generated column or computed in queries.
 4. Property dedupe strategy: strict on (address1+city+state+zip) lowercased? Smarty/USPS validation on ingest? Decision in `04-field-mapping.md`.
 5. Whether Safe House operates with multiple territories (pilot showed only "Territory A"). Augment may surface more.
+
+---
+
+## v3.1.3 additions — Phase 4 audit (2026-04-28)
+
+Three additive changes. No existing column shapes altered. No migrations to existing tables break existing queries.
+
+### `properties.gateCode varchar(50)`
+
+ISN stores gate/keypad codes for gated community properties on the order (`order.gatecode`). Operationally important — inspectors need this to access the property. Could not credibly jam into `customFields` (frequent query target, short enough for a dedicated column, not PII-classified as it's a property attribute not a person attribute). Added as nullable `gate_code varchar(50)` to `properties`. Sourced from `order.gatecode` during migration; carried forward as a property attribute (not order-specific — the gate code applies to the property address regardless of which inspection triggered its capture).
+
+### `services` table additions (7 fields)
+
+Phase 4 discovered the undocumented `/services` ISN endpoint with 20 service definitions richer than the spec implied. Added:
+
+- **`isnSid integer`** — ISN's stable integer service ID (`sid` field). Separate from `isnSourceId` (UUID). ISN uses integer SIDs for cross-referencing in its pricing engine. Preserving for migration traceability and future ISN API calls.
+- **`ancillary boolean`** — Whether the service is an add-on (true) or a primary inspection type (false). Relevant for booking logic: ancillary services cannot be booked standalone. Default false.
+- **`visibleToDispatcher boolean`** — Whether to show on the internal dispatcher booking form. Default true.
+- **`visibleOnlineBooking boolean`** — Whether to show on the client-facing online booking form. Default false (most services are dispatcher-booked).
+- **`isPac boolean`** — Pay-at-Close convenience service flag. All 20 current ISN services have `is_pac='No'`; included for schema completeness and future services. Default false.
+- **`modifiers jsonb`** — Price modifier rules array. No active samples observed in Phase 4 (all services have empty modifiers arrays). Shape unknown; preserved as nullable jsonb.
+- **`questions jsonb`** — Booking intake questions. Shape confirmed: `[{id: uuid, type: 'boolean'|'text', question: string}]`. All 20 services share 4 questions (referral source × 3 booleans + free-text concern). Preserved as jsonb for flexibility.
+
+Decision: the service model is richer than v3.1.2 assumed. Rather than shoe-horn into category/description, the ISN-specific fields are preserved as first-class columns so migration is lossless and the v3 booking form can be built on real data.
+
+### `inspection_notes` table (new)
+
+ISN's `/order/notes/{id}` endpoint (undocumented, Phase 4) returns per-order notes distinct from the audit history. Notes have their own timestamps and author tracking; the distinction between dispatcher notes and system-generated notes (payment events, etc.) matters operationally for QA and dispute resolution.
+
+Decision against `customFields`: notes need independent timestamps and author attribution, are queried individually (e.g. "show all notes for this inspection"), and are subject to role-gated visibility (`is_internal`). These properties require a proper table.
+
+Schema: `(id, inspection_id → inspections, author_id → users [nullable for system], note_type [dispatcher|system|inspector], content, is_internal, created_at, isn_source_id [nullable])`.
+
+Permission gating: `is_internal=false` notes visible to anyone with `view.inspection`. `is_internal=true` notes require `view.inspection.internal_notes` (existing permission — no new permission needed).
+
+Note type mapping from ISN: dispatcher notes (`user` = `{id, display}` object) → `note_type='dispatcher'`; system notes (`user = []` empty array) → `note_type='system'`.
+
+### Open question resolution (v3.1.2 Q5)
+
+Q5 asked whether Safe House operates with multiple territories. Phase 4 confirmed: two cost centers — Territory A and Territory B. These are stored as `costCenterName varchar(100)` on `inspections` (string, not FK). No separate lookup table warranted for two stable values.

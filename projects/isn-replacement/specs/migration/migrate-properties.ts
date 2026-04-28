@@ -77,11 +77,32 @@ interface OrderPropertyFields {
   longitude?: number;
   yearbuilt?: string;
   squarefeet?: string;
-  foundation?: string;
+  foundation?: string;          // UUID (fallback)
+  foundationText?: string;      // Phase 4: human-readable from FoundationType control (preferred)
   propertyoccupied?: string;
+  gatecode?: string;            // Phase 4: v3.1.3 gateCode field
+}
+
+/** Phase 4: translate foundation type using control value (preferred) or UUID map (fallback). */
+function resolveFoundationType(fields: OrderPropertyFields): string | null {
+  // Prefer the human-readable control value (Phase 4: more reliable, handles future types)
+  if (fields.foundationText) {
+    const text = fields.foundationText.toLowerCase().trim();
+    if (text === "crawlspace" || text === "crawl space") return "crawl_space";
+    if (text === "slab") return "slab";
+    if (text === "basement") return "basement";
+    if (text === "pier and beam" || text === "pier_and_beam") return "pier_and_beam";
+    return text.replace(/\s+/g, "_"); // best-effort normalization
+  }
+  // Fallback: UUID map (confirmed correct for the two observed UUIDs)
+  return translateIsnFoundation(fields.foundation);
 }
 
 function extractPropertyFromOrder(order: ISNOrderDetail): OrderPropertyFields {
+  // Phase 4: extract foundation type from FoundationType control (preferred over UUID)
+  const controls = (order.controls as Array<{ type?: string; value?: string }>) ?? [];
+  const foundationControl = controls.find((c) => c.type === "FoundationType");
+
   return {
     isnOrderId: order.id,
     address1: normalizeIsnString(order.address1 as string) ?? undefined,
@@ -92,10 +113,12 @@ function extractPropertyFromOrder(order: ISNOrderDetail): OrderPropertyFields {
     county: normalizeIsnString(order.county as string) ?? undefined,
     latitude: order.latitude as number | undefined,
     longitude: order.longitude as number | undefined,
-    yearbuilt: order.yearbuilt as string | undefined,
+    yearbuilt: (order.yearbuilt ?? order.squarefeet) as string | undefined, // squareFeet in YearBuilt control
     squarefeet: order.squarefeet as string | undefined,
     foundation: order.foundation as string | undefined,
+    foundationText: foundationControl?.value ?? undefined,  // Phase 4: direct text
     propertyoccupied: order.propertyoccupied as string | undefined,
+    gatecode: normalizeIsnString(order.gatecode as string) ?? undefined, // Phase 4: v3.1.3
   };
 }
 
@@ -183,8 +206,9 @@ async function main() {
       longitude: canonical.longitude ? String(canonical.longitude) : null,
       yearBuilt: canonical.yearbuilt ? parseInt(canonical.yearbuilt, 10) : null,
       squareFeet: canonical.squarefeet ? parseInt(canonical.squarefeet, 10) : null,
-      foundation: translateIsnFoundation(canonical.foundation),
+      foundation: resolveFoundationType(canonical),  // Phase 4: control value preferred over UUID map
       occupancy: canonical.propertyoccupied === "yes" ? "occupied" : canonical.propertyoccupied === "no" ? "vacant" : null,
+      gateCode: canonical.gatecode ?? null,           // Phase 4: v3.1.3 properties.gate_code
     }).returning();
 
     await db.insert(propertyBusinesses).values({

@@ -1,11 +1,15 @@
 /**
- * migrate-services.ts — Step 0.5: Import ISN ordertypes as v3 services.
+ * migrate-services.ts — Step 0.5: Import ISN services as v3 services.
  *
- * Runs after seed.ts (needs business IDs) and before migrate-orders.ts
- * (orders reference services via line items). Idempotent via isnSourceId upsert.
+ * Phase 4 update: now uses the undocumented /services endpoint (20 rich records)
+ * as the primary source instead of /ordertypes (stub-level data only). Falls back
+ * to /ordertypes for any ordertype not present in /services.
  *
- * Also imports ISN fee catalog (25 fixed fee rows from order.fees[]) as
- * additional services for line-item matching.
+ * Fields added in v3.1.3: isnSid, ancillary, visibleToDispatcher, visibleOnlineBooking,
+ * isPac, modifiers, questions.
+ *
+ * Runs after seed.ts (needs business IDs) and before migrate-orders.ts.
+ * Idempotent via isnSourceId upsert.
  *
  * Run: npx tsx specs/migration/migrate-services.ts
  */
@@ -35,6 +39,36 @@ interface ISNOrdertype {
   sequence?: number;
   show?: string;
   modified?: string;
+}
+
+/** Phase 4: rich service record from undocumented /services endpoint */
+interface ISNService {
+  id: string;                    // UUID (same as isnSourceId)
+  sid: number;                   // ISN stable integer SID
+  office: string;
+  name: string;
+  privatename?: string;
+  inspectiontypeid?: string;     // UUID of associated ordertype
+  inspectiontype?: {             // embedded ordertype object
+    id: string;
+    _id: number;
+    name: string;
+    description?: string;
+    publicdescription?: string;
+    sequence?: number;
+    fee?: string;
+    show?: string;
+  };
+  label?: string;
+  modifiers?: unknown[];          // price modifier rules; no samples observed
+  ancillary: string;             // 'Yes'|'No' (ISN string boolean)
+  visible: string;               // 'Yes'|'No' — visible to dispatcher
+  visible_order_form: string;    // 'Yes'|'No' — visible on online booking
+  sequence?: number;
+  is_pac: string;                // 'Yes'|'No' — Pay-at-Close flag
+  description?: string;
+  perceptionist_name?: string;
+  questions?: Array<{ id: string; type: 'boolean' | 'text'; question: string }>;
 }
 
 interface ISNFeeRow {
@@ -68,46 +102,64 @@ async function main() {
   const config: PerAccountConfig = { accountSlug: process.env.SEED_ACCOUNT_SLUG ?? "pappas" };
   const defaultDuration = defaultDurationForBusinessType("inspection", config);
 
-  // ---- Step 1: Pull ISN ordertypes ----
+  // ---- Step 1: Pull ISN /services (Phase 4: undocumented endpoint, rich data) ----
+  let isnServices: ISNService[] = [];
+  try {
+    const svcResp = await isnGet<{ services: ISNService[] }>("/services");
+    isnServices = svcResp.services ?? [];
+    log("migrate-services", `Pulled ${isnServices.length} services from /services (undocumented endpoint)`);
+  } catch (err) {
+    log("migrate-services", `WARNING: /services endpoint unavailable (${err}). Will fall back to /ordertypes only.`);
+  }
+
+  // Also pull ordertypes for any entries not in /services
   const resp = await isnGet<{ ordertypes: ISNOrdertype[] }>("/ordertypes/");
   const ordertypes = resp.ordertypes;
-  log("migrate-services", `Pulled ${ordertypes.length} ordertypes from ISN`);
+  log("migrate-services", `Pulled ${ordertypes.length} ordertypes from /ordertypes/`);
+
+  // Build lookup: inspectiontypeid → ISNService (from /services)
+  const serviceByInspectionTypeId = new Map<string, ISNService>();
+  const serviceByUUID = new Map<string, ISNService>();
+  for (const svc of isnServices) {
+    if (svc.inspectiontypeid) serviceByInspectionTypeId.set(svc.inspectiontypeid, svc);
+    serviceByUUID.set(svc.id, svc);
+  }
 
   let imported = 0, updated = 0, skipped = 0;
 
-  for (const ot of ordertypes) {
-    const name = normalizeIsnString(ot.name) ?? "Unknown Service";
+  // ---- Step 1a: Upsert from /services (rich records) ----
+  for (const svc of isnServices) {
+    const name = normalizeIsnString(svc.name) ?? "Unknown Service";
+    if (shouldSkipOrdertype(name)) { skipped++; continue; }
 
-    if (shouldSkipOrdertype(name)) {
-      log("migrate-services", `Skipping warning row: "${name}"`);
-      skipped++;
-      continue;
-    }
-
-    const active = coerceIsnBoolean(ot.show);
-    const description = normalizeIsnString(ot.description) ?? null;
-    // Tag duplicates: ISN has multiple "Reinspection" rows — mark older inactive ones
-    const isDuplicate = !active && name === normalizeIsnString(ot.name);
+    // Determine active: use inspectiontype.show if available, else visible
+    const active = coerceIsnBoolean(svc.inspectiontype?.show ?? svc.visible) ?? true;
 
     const payload = {
       businessId: SAFEHOUSE_BIZ_ID,
       name,
-      description: isDuplicate ? `[duplicate, retired] ${description ?? ""}`.trim() : description,
-      publicDescription: normalizeIsnString(ot.publicdescription) ?? null,
-      baseFee: "0.00", // ISN ordertypes have no fee; fee comes from the order's fees[] array
+      description: normalizeIsnString(svc.description) ?? null,
+      publicDescription: null,
+      category: svc.ancillary === "Yes" ? "add-on" : "primary",
+      baseFee: "0.00",
       defaultDurationMinutes: defaultDuration,
-      sequence: ot.sequence ?? 100,
+      sequence: svc.sequence ?? 100,
       active,
-      isnSourceId: ot.id,
+      isnSourceId: svc.id,
+      // v3.1.3 new fields
+      isnSid: svc.sid,
+      ancillary: svc.ancillary === "Yes",
+      visibleToDispatcher: svc.visible === "Yes",
+      visibleOnlineBooking: svc.visible_order_form === "Yes",
+      isPac: svc.is_pac === "Yes",
+      modifiers: svc.modifiers && svc.modifiers.length > 0 ? svc.modifiers : null,
+      questions: svc.questions && svc.questions.length > 0 ? svc.questions : null,
       createdBy: systemUserId,
       lastModifiedBy: systemUserId,
     };
 
     const existing = await db.query.services?.findFirst({
-      where: (s, { and, eq }) => and(
-        eq(s.businessId, SAFEHOUSE_BIZ_ID),
-        eq(s.isnSourceId, ot.id)
-      ),
+      where: (s, { and, eq }) => and(eq(s.businessId, SAFEHOUSE_BIZ_ID), eq(s.isnSourceId, svc.id)),
     });
 
     if (existing) {
@@ -119,7 +171,46 @@ async function main() {
     }
   }
 
-  log("migrate-services", `Ordertypes: ${imported} imported, ${updated} updated, ${skipped} skipped`);
+  // ---- Step 1b: Upsert ordertypes NOT covered by /services ----
+  for (const ot of ordertypes) {
+    const name = normalizeIsnString(ot.name) ?? "Unknown Service";
+    if (shouldSkipOrdertype(name)) { skipped++; continue; }
+    if (serviceByInspectionTypeId.has(ot.id)) continue; // already imported via /services
+
+    const active = coerceIsnBoolean(ot.show);
+    const description = normalizeIsnString(ot.description) ?? null;
+    const payload = {
+      businessId: SAFEHOUSE_BIZ_ID,
+      name,
+      description,
+      publicDescription: normalizeIsnString(ot.publicdescription) ?? null,
+      baseFee: "0.00",
+      defaultDurationMinutes: defaultDuration,
+      sequence: ot.sequence ?? 100,
+      active,
+      isnSourceId: ot.id,
+      ancillary: false,
+      visibleToDispatcher: true,
+      visibleOnlineBooking: false,
+      isPac: false,
+      createdBy: systemUserId,
+      lastModifiedBy: systemUserId,
+    };
+
+    const existing = await db.query.services?.findFirst({
+      where: (s, { and, eq }) => and(eq(s.businessId, SAFEHOUSE_BIZ_ID), eq(s.isnSourceId, ot.id)),
+    });
+
+    if (existing) {
+      await db.update(services).set(payload).where(eq(services.id, existing.id));
+      updated++;
+    } else {
+      await db.insert(services).values(payload);
+      imported++;
+    }
+  }
+
+  log("migrate-services", `Services: ${imported} imported, ${updated} updated, ${skipped} skipped`);
 
   // ---- Step 2: Pull fee catalog from a sample order ----
   // The fees[] array on orders contains 25 fixed rows with stable ISN UUIDs.
