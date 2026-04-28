@@ -180,8 +180,10 @@ async function main() {
       }
     }
 
-    const displayName = normalizeIsnString(a.displayname as string)
-      ?? [a.firstname, a.lastname].filter(Boolean).join(" ")
+    // CONFIRMED Phase 3: agents use 'first'/'last'/'display'/'email'/'sendsms'/'img'
+    // NOT 'firstname'/'lastname'/'displayname'/'emailaddress'/'sendSMS'/'photourl'
+    const displayName = normalizeIsnString(a.display as string)
+      ?? [a.first, a.last].filter(Boolean).join(" ")
       ?? "Unknown Agent";
 
     const existing = await db.query.transactionParticipants?.findFirst({
@@ -192,15 +194,16 @@ async function main() {
       accountId: ACCOUNT_ID,
       agencyId: isnAgencyId ? agencyMap.get(isnAgencyId) ?? null : null,
       displayName,
-      firstName: normalizeIsnString(a.firstname as string),
-      lastName: normalizeIsnString(a.lastname as string),
-      email: normalizeIsnString(a.emailaddress as string),
-      phone: normalizeIsnString(a.phone as string),
-      mobile: normalizeIsnString(a.mobile as string),
-      primaryRole: null, // derived in post-pass (Step 7)
+      firstName: normalizeIsnString(a.first as string),
+      lastName: normalizeIsnString(a.last as string),
+      email: normalizeIsnString(a.email as string),                    // 'email' not 'emailaddress'
+      phone: normalizeIsnString(a.workphone as string),                // 'workphone' not 'phone'
+      mobile: normalizeIsnString(a.mobilephone as string),             // 'mobilephone' not 'mobile'
+      primaryRole: null, // derived in post-pass (Step 7); tc=true agents factor into TC derivation
       status: coerceIsnBoolean(a.show as string) ? "active" as const : "inactive" as const,
       isnSourceId: stub.id,
       isnSourceType: "agent",
+      // Note: smsOptIn uses 'sendsms' (all-lowercase) for agents
     };
 
     let v3Id: string;
@@ -251,10 +254,12 @@ async function main() {
     if (!detail?.client) continue;
 
     const c = detail.client as Record<string, string | null>;
-    const displayName = normalizeIsnString(c.displayname)
-      ?? [c.firstname, c.lastname].filter(Boolean).join(" ")
+    // CONFIRMED Phase 3: clients use 'first'/'last'/'display'/'email'/'send_sms'
+    // NOT 'firstname'/'lastname'/'displayname'/'emailaddress'/'sendSMS'
+    const displayName = normalizeIsnString(c.display)
+      ?? [c.first, c.last].filter(Boolean).join(" ")
       ?? "Unknown Client";
-    const email = normalizeIsnString(c.emailaddress);
+    const email = normalizeIsnString(c.email);
     const dedup = customerDedupeKey({ email, displayName });
 
     // Check existing by isnSourceId first
@@ -295,18 +300,18 @@ async function main() {
     const [created] = await db.insert(customers).values({
       accountId: ACCOUNT_ID,
       displayName,
-      firstName: normalizeIsnString(c.firstname),
-      lastName: normalizeIsnString(c.lastname),
+      firstName: normalizeIsnString(c.first),             // 'first' not 'firstname'
+      lastName: normalizeIsnString(c.last),               // 'last' not 'lastname'
       email,
-      phoneMobile: normalizeIsnString(c.phonemobile),
-      phoneHome: normalizeIsnString(c.phonehome),
-      phoneWork: normalizeIsnString(c.phonework),
+      phoneMobile: normalizeIsnString(c.mobilephone),     // 'mobilephone' not 'phonemobile'
+      phoneHome: normalizeIsnString(c.homephone),         // 'homephone' not 'phonehome'
+      phoneWork: normalizeIsnString(c.workphone),         // 'workphone' not 'phonework'
       address1: normalizeIsnString(c.address1),
       city: normalizeIsnString(c.city),
       state: normalizeIsnString(c.stateabbreviation),
       zip: normalizeIsnString(c.zip),
-      smsOptIn: coerceIsnBoolean(c.sendSMS),
-      emailOptIn: true,
+      smsOptIn: coerceIsnBoolean(c.send_sms),          // 'send_sms' not 'sendSMS' for clients
+      emailOptIn: coerceIsnBoolean(c.send_email) ?? true, // 'send_email' not 'sendemail' for clients
       status: coerceIsnBoolean(c.show) ? "active" as const : "inactive" as const,
       isnSourceId: stub.id,
       isnSourceType: "client",
@@ -331,6 +336,14 @@ async function main() {
   }
 
   log("migrate-contacts", `Clients: ${clientsImported} imported, ${clientsUpdated} updated, ${clientsMerged} merged`);
+  // ---- Escrow officers (→ transaction_participants) ----
+  // TODO: implement when ready. Field name notes from Phase 3 crawl:
+  //   eo.firstname (NOT first)  eo.lastname (NOT last)  eo.displayname (NOT display)
+  //   eo.email                  eo.phone                eo.cellPhone (capital P!) → mobile
+  //   NO agency FK; escrow officers are standalone
+  //   isnSourceType = 'escrowofficer', primaryRole = 'escrow_officer'
+  log("migrate-contacts", "(Escrow officer import not yet implemented)");
+
   log("migrate-contacts", "Migration complete");
   await pool.end();
 }

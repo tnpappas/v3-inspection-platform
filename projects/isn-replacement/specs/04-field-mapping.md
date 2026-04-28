@@ -140,22 +140,27 @@ Staff adjust per service post-migration via the services UI.
 
 ## /clients (customers)
 
-ISN fields inferred from the ISN spec (we did not deep-crawl `/clients` in Phase 2). Mapping below is the migration target shape; expect minor corrections during the implementation pass.
+Field names confirmed via Phase 3 deep crawl (`GET /client/{id}`, 2026-04-28). ISN client field names differ from user field names; use the client-specific names below.
 
 | ISN field | v3 column | Notes |
 |---|---|---|
 | `id` | `customers.isnSourceId` | Preserved. `customers.isnSourceType = 'client'`. |
-| `firstname` | `customers.firstName` | |
-| `lastname` | `customers.lastName` | |
-| `displayname` | `customers.displayName` | Fallback to `"{first} {last}"`. |
-| `emailaddress` | `customers.email` | Lowercased. |
-| `phonemobile` | `customers.phoneMobile` | |
-| `phonehome` | `customers.phoneHome` | |
-| `phonework` | `customers.phoneWork` | |
+| `first` | `customers.firstName` | **`first` not `firstname`** — confirmed Phase 3 |
+| `last` | `customers.lastName` | **`last` not `lastname`** — confirmed Phase 3 |
+| `display` | `customers.displayName` | **`display` not `displayname`** — confirmed Phase 3 |
+| `email` | `customers.email` | **`email` not `emailaddress`** — confirmed Phase 3. Lowercased. |
+| `mobilephone` | `customers.phoneMobile` | **`mobilephone` not `phonemobile`** — confirmed Phase 3 |
+| `homephone` | `customers.phoneHome` | **`homephone` not `phonehome`** — confirmed Phase 3 |
+| `workphone` | `customers.phoneWork` | **`workphone` not `phonework`** — confirmed Phase 3 |
+| `mobilephone2`, `mobilephone3` | (drop) | Additional phones, rarely populated |
+| `workfax`, `homefax` | (drop) | |
+| `companyname` | (drop) | Rarely populated; fold into notes if needed |
 | `address1`, `address2`, `city`, `state` (UUID), `stateabbreviation`, `zip` | `customers.address1/.../zip` | Use `stateabbreviation`. |
 | `notes` | `customers.notes` | Free text. |
-| `sendSMS` | `customers.smsOptIn` | Coerce. |
-| `sendemail` (if present) | `customers.emailOptIn` | Coerce; default true if not present. |
+| `send_sms` | `customers.smsOptIn` | **`send_sms` not `sendSMS`** — confirmed Phase 3. Coerce. |
+| `send_email` | `customers.emailOptIn` | **`send_email` not `sendemail`** — confirmed Phase 3. Default true if absent. |
+| `porch` | (drop) | ISN-specific field, purpose unknown |
+| `url` | (drop) | Client's website URL, not used |
 | `modified` | `customers.updatedAt` | |
 | `show` | `customers.status` | `Yes`→`active`. |
 
@@ -167,27 +172,75 @@ ISN fields inferred from the ISN spec (we did not deep-crawl `/clients` in Phase
 
 All three ISN entity types map into the single `transaction_participants` table.
 
+**Field names vary by entity type** — confirmed via Phase 3 deep crawl 2026-04-28. Each entity type uses different ISN field names for the same concepts:
+
+### Agents (`/agent/{id}`) — 34 fields
+
 | ISN field | v3 column | Notes |
 |---|---|---|
 | `id` | `transaction_participants.isnSourceId` | |
 | `agency` (UUID) | `transaction_participants.agencyId` | Joined via `agencies.isnSourceId` lookup. |
-| `firstname` | `firstName` | |
-| `lastname` | `lastName` | |
-| `displayname` | `displayName` | |
-| `emailaddress` | `email` | Lowercased. |
-| `phone` | `phone` | |
-| `mobile` | `mobile` | |
+| `first` | `firstName` | **`first` not `firstname`** — agents match clients, not users |
+| `last` | `lastName` | **`last` not `lastname`** |
+| `display` | `displayName` | **`display` not `displayname`** |
+| `email` | `email` | **`email` not `emailaddress`** — agents match clients |
+| `workphone` | `phone` | |
+| `mobilephone` | `mobile` | |
+| `img` | `photoUrl` (future) | **`img` not `photourl`** — agents use `img`, users use `photourl` |
+| `sendsms` | `smsOptIn` | **`sendsms` (all lowercase)** — three different spellings across ISN entities |
+| `sendemail` | `emailOptIn` | |
+| `bio` | `notes` (or drop) | |
+| `tc` | (hint only) | Boolean; if true, agent also serves as TC. Factors into `primaryRole` post-pass. |
 | `notes` | `notes` | |
 | `modified` | `updatedAt` | |
 | `show` | `status` | |
+| `latitude`, `longitude` | (drop) | Geo at participant level not needed |
+| `redactive`, `redurl`, `labels`, `lastactive` | (drop) | ISN tracking fields |
+| `workfax`, `homefax`, `homephone`, `mobilephone2`, `mobilephone3` | (drop or secondary storage) | |
+| `url` | (drop) | Agent's website URL |
+
+### Escrow officers (`/escrowofficer/{id}`) — 16 fields
+
+| ISN field | v3 column | Notes |
+|---|---|---|
+| `id` | `transaction_participants.isnSourceId` | |
+| `firstname` | `firstName` | **`firstname` not `first`** — escrow officers match users, not clients/agents |
+| `lastname` | `lastName` | |
+| `displayname` | `displayName` | |
+| `email` | `email` | Lowercased. |
+| `phone` | `phone` | |
+| `cellPhone` | `mobile` | **`cellPhone` (capital P)** — unique spelling across all ISN entities |
+| `fax` | (drop) | |
+| `address1`–`zip` | (drop) | Escrow officer address not needed in v3 |
+| `office` | (drop) | ISN office UUID, not the same as Safe House business |
+| `url` | (drop) | |
+
+Note: escrow officers have NO `agency` FK. They are standalone records.
+
+### Insurance agents — endpoint broken
+
+`/insuranceagents` returns `status:error`. Safe House has 0 insurance agents. Skip entirely (confirmed in phase 1 and phase 3).
+
+### ISN SMS opt-in field name inconsistency
+
+ISN uses THREE different field names for the same concept across entity types:
+
+| Entity | Field name |
+|---|---|
+| Users | `sendSMS` (camelCase) |
+| Clients | `send_sms` (snake_case with underscore) |
+| Agents | `sendsms` (all lowercase, no separator) |
+| Escrow officers | (not present) |
+
+The migration helper `coerceIsnBoolean()` handles the value; the migration scripts must read the correct field name per entity type.
 
 **`isnSourceType` and `primaryRole` on each row:**
 
-- `/agents` → `transaction_participants.isnSourceType = 'agent'`, `primaryRole = NULL` on initial import. A second migration pass derives `primaryRole` from the participant's actual deal-history distribution: count their `inspection_participants.role_in_transaction` rows by value; set `primaryRole` to the most frequent (typically `buyer_agent` or `listing_agent`). Ties resolve to `buyer_agent`. This avoids biasing toward Safe House's residential-buyer-heavy mix and works for licensees with different distributions.
-- `/escrowofficers` → `isnSourceType = 'escrowofficer'`, `primaryRole = 'escrow_officer'` (unambiguous from source type).
-- `/insuranceagents` → `isnSourceType = 'insuranceagent'`, `primaryRole = 'insurance_agent'` (unambiguous).
+- `/agents` → `transaction_participants.isnSourceType = 'agent'`, `primaryRole = NULL` on initial import. A second migration pass derives `primaryRole` from the participant's actual deal-history distribution: count their `inspection_participants.role_in_transaction` rows by value; set `primaryRole` to the most frequent (typically `buyer_agent` or `listing_agent`). Ties resolve to `buyer_agent`. If `tc=true` is set on the agent, the post-pass also considers `transaction_coordinator` in the distribution. This avoids biasing toward Safe House's residential-buyer-heavy mix.
+- `/escrowofficers` → `isnSourceType = 'escrowofficer'`, `primaryRole = 'escrow_officer'` (unambiguous).
+- `/insuranceagents` → skip (endpoint broken, no records).
 
-For `/agents` rows that have ZERO `inspection_participants` after order migration (orphaned agents from old or test data), `primaryRole` stays NULL. The UI handles null `primaryRole` as "unspecified."
+For `/agents` rows with zero `inspection_participants` after order migration, `primaryRole` stays NULL.
 
 **For agent/escrow/insurance items that ISN does not surface but Safe House uses (lender, attorney):** these only appear via custom workflow at order intake. Migration does not pre-populate them; they get added as bill-to-closing inspections come in.
 

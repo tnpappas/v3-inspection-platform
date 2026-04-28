@@ -29,6 +29,32 @@ The foundation UUID → string mapping in `migrate-properties.ts` was inferred f
 
 ---
 
+### 1.1b Verify ISN field name consistency (CRITICAL — do this first)
+
+**Confirmed issue from Phase 3 crawl (2026-04-28):** ISN uses different field names for the same concept across entity types. `migrate-contacts.ts` has been corrected, but verify the fix before running.
+
+Expected field names per entity:
+
+| Concept | Users | Clients | Agents | Escrow officers |
+|---|---|---|---|---|
+| First name | `firstname` | `first` | `first` | `firstname` |
+| Email | `emailaddress` | `email` | `email` | `email` |
+| SMS opt-in | `sendSMS` | `send_sms` | `sendsms` | (none) |
+| Photo | `photourl` | (none) | `img` | (none) |
+| Mobile phone | `mobile` | `mobilephone` | `mobilephone` | `cellPhone` |
+
+```bash
+# Spot-check: pull one client and one agent, verify field names match the table above
+curl -s -u "$ISN_ACCESS_KEY:$ISN_SECRET_ACCESS" \
+  "https://inspectionsupport.net/safehouse/rest/client/<any_client_uuid>" | python3 -m json.tool | head -20
+curl -s -u "$ISN_ACCESS_KEY:$ISN_SECRET_ACCESS" \
+  "https://inspectionsupport.net/safehouse/rest/agent/<any_agent_uuid>" | python3 -m json.tool | head -20
+```
+
+- [ ] Client fields confirmed: `first`, `last`, `display`, `email`, `mobilephone`, `homephone`, `workphone`, `send_sms`, `send_email`
+- [ ] Agent fields confirmed: `first`, `last`, `display`, `email`, `mobilephone`, `workphone`, `sendsms`, `img`
+- [ ] Escrow officer fields confirmed: `firstname`, `lastname`, `displayname`, `email`, `phone`, `cellPhone`
+
 ### 1.2 Pull `/clients` deep crawl
 
 **Open question #5 from spec 05.**
