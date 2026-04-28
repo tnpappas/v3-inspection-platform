@@ -1,5 +1,5 @@
 /**
- * 01-schema.ts (v3.1.2, licensing-ready + RBAC + system user + rescheudle dedup) — LOCKED 2026-04-27
+ * 01-schema.ts (v3.1.2, licensing-ready + RBAC + system user + reschedule dedup) — LOCKED 2026-04-27
  *
  * STATUS: LOCKED. Canonical schema for the rebuild. Subsequent changes follow
  * the migration-plan workflow (additive migrations, backwards-compatible
