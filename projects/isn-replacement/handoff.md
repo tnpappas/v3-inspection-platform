@@ -56,7 +56,7 @@ In commit order (most recent first):
 | `01-schema-rationale.md` | LOCKED (RBAC architecture + migration design principles + bill-to-closing + Inspections conventions sections) |
 | `03-user-stories.md` | LOCKED (30 stories + 7 Mermaid workflows + permission `requires:` lines + O-6, OM-6, B-1..B-5) |
 | `04-field-mapping.md` | LOCKED |
-| `05-migration-plan.draft.md` | DRAFT (Step 0 seeding expanded, Step 5.5 system user; lock pass after spec 02) |
+| `05-migration-plan.md` | DRAFT (Step 0 seeding expanded, Step 5.5 system user; lock pass after spec 02) |
 | `06-security-spec.md` | UPDATED (S1-S11 complete; system user + implicit denies + PII masking subsections under S11) |
 | `07-scalability-spec.md` | LOCKED (refreshed with v3 hot paths + cross-business customer query + read_sensitive multiplier) |
 | `08-multi-business-extensibility-spec.md` | LOCKED (layered worked examples + organizations future expansion) |

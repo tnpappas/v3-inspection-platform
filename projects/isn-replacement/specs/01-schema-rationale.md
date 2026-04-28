@@ -568,7 +568,7 @@ Captured 2026-04-27 from review pass. Not implemented in the scheduling slice; s
 
 **Action items for downstream work:**
 
-- Migration plan (`05-migration-plan.draft.md`): identify ISN orders that used bill-to-closing historically. Trace via order notes or invoice-routing fields. Migrate the participants correctly.
+- Migration plan (`05-migration-plan.md`): identify ISN orders that used bill-to-closing historically. Trace via order notes or invoice-routing fields. Migrate the participants correctly.
 - Booking flow design: capture bill-to-closing as a flag at intake.
 - Payments slice: design invoice-routing model and payment-trigger semantics.
 
