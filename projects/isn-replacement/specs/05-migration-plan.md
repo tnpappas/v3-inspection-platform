@@ -1,6 +1,6 @@
 # Migration Plan
 
-_Status: LOCKED 2026-04-28. Companion to `specs/01-schema.ts` (v3.1.1), `specs/04-field-mapping.md`, and `specs/02-api-contract.yaml`._
+_Status: LOCKED 2026-04-28. Companion to `specs/01-schema.ts` (v3.1.2), `specs/04-field-mapping.md`, and `specs/02-api-contract.yaml`._
 
 This plan covers the full migration from ISN (Inspection Support Network) to the v3.1.1 schema. It assumes an empty target database with the v3.1.1 schema already applied (Option A, per Troy's directive 2026-04-27 16:56 UTC).
 
