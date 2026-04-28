@@ -4,6 +4,8 @@ info:
   title: "ISN Replacement API — Scheduling Slice"
   version: "0.1.0"
   description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
     REST API contract for the ISN replacement system (isn-killer), scheduling slice.
 
     ## Conventions
@@ -920,6 +922,8 @@ components:
           format: date-time
           nullable: true
           description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
             Null when status=on_hold (sentinel 9999-12-31T23:59:59Z is translated
             to null by the serialization layer). ISO 8601 UTC otherwise.
         pendingSchedule:
@@ -2919,21 +2923,42 @@ paths:
       tags: [inspections]
       x-required-permissions:
         all: ["delete.inspection"]
+      description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
+        Administrative soft-delete. Sets deletedAt/deletedBy/deleteReason. Distinct from
+        POST /cancel which is the operational cancellation path.
+        A reason is required. Two supported forms for client compatibility:
+          1. JSON body: { "reason": "..." }
+          2. Query parameter: ?reason=...
+        Both are equivalent. JSON body is preferred; query parameter is provided for
+        HTTP clients that do not support DELETE with a body.
       parameters:
         - $ref: "#/components/parameters/pathId"
+        - name: reason
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "Alternative to JSON body. If both are provided, JSON body takes precedence."
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
-              required: [reason]
               properties:
                 reason:
                   type: string
       responses:
         "204":
           description: "Soft-deleted"
+        "400":
+          description: "Missing reason (neither body nor query parameter provided)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: "Not found"
           content:
@@ -3003,7 +3028,19 @@ paths:
                   type: string
                   format: date-time
                   nullable: true
-                  description: "Null transitions to on_hold."
+                  description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
+                    The new scheduled time (UTC).
+                    - Provide a date-time to lock a date; status transitions:
+                        on_hold  -> scheduled (date now locked)
+                        scheduled -> scheduled (rescheduled to new time)
+                        confirmed -> scheduled (confirmation resets on date change)
+                    - Omit or set null to release the date; status transitions:
+                        scheduled -> on_hold (date bumped, TBD)
+                        on_hold   -> on_hold  (still pending, reason captured)
+                    scheduledAt=null stores ON_HOLD_PLACEHOLDER_AT (9999-12-31T23:59:59Z)
+                    internally and the API serializes it back as null with pendingSchedule=true.
                 durationMinutes:
                   type: integer
                   nullable: true
@@ -3011,17 +3048,40 @@ paths:
                   type: string
                   format: uuid
                   nullable: true
+                  description: "Null to unassign the inspector (allowed only when transitioning to on_hold)."
                 reason:
                   type: string
+                  description: "Required. Captured in reschedule_history and audit_log."
+                acknowledgeConflicts:
+                  type: boolean
+                  default: false
+                  description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
+                    When false (default): if the new slot conflicts with the inspector's
+                    existing schedule or falls outside business hours, the API returns 422
+                    with ConflictCheckResponse details. The reschedule does NOT commit.
+                    When true: the reschedule commits despite warnings. The conflict
+                    acknowledgment is captured in audit_log.changes.metadata.acknowledgedConflicts.
+                    Use only when the dispatcher has reviewed the conflict and is intentionally
+                    overriding (e.g., two inspections in the same area back-to-back).
       responses:
         "200":
-          description: "Rescheduled. A reschedule_history row is created."
+          description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
+            Rescheduled. A reschedule_history row is created.
+            Status transitions are determined by whether scheduledAt is provided (see field description).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InspectionResponse"
         "422":
-          description: "Conflict or outside business hours (warn-not-block; conflict info included)"
+          description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
+            Conflict or outside business hours when acknowledgeConflicts=false (default).
+            Retry with acknowledgeConflicts=true to override.
           content:
             application/json:
               schema:
@@ -3034,11 +3094,17 @@ paths:
 
   /inspections/{id}/cancel:
     post:
-      summary: "Cancel an inspection (operational state; sets status=cancelled)"
+      summary: "Cancel an inspection (operational cancellation; sets status=cancelled)"
       operationId: cancelInspection
       tags: [inspections]
       x-required-permissions:
         all: ["cancel.inspection"]
+      description: |
+    STATUS: LOCKED 2026-04-28. Companion to specs/01-schema.ts (v3.1.1), specs/03-user-stories.md, specs/04-field-mapping.md.
+
+        Sets inspections.status = 'cancelled', captures cancelledAt, cancelledBy, cancelReason.
+        Distinct from DELETE /inspections/{id} which is an administrative soft-delete.
+        Valid from any non-terminal status: scheduled, confirmed, en_route, in_progress, on_hold.
       parameters:
         - $ref: "#/components/parameters/pathId"
       requestBody:
@@ -3053,11 +3119,17 @@ paths:
                   type: string
       responses:
         "200":
-          description: "Cancelled"
+          description: "Cancelled. Inspection status is now 'cancelled'."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InspectionResponse"
+        "422":
+          description: "Cannot cancel from current status (e.g., already cancelled or completed)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /inspections/{id}/status:
     patch:
@@ -3464,6 +3536,83 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgencyResponse"
+
+  /agencies/{id}:
+    get:
+      summary: "Get an agency"
+      operationId: getAgency
+      tags: [agencies]
+      x-required-permissions:
+        all: ["view.agency"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Agency record"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update an agency"
+      operationId: updateAgency
+      tags: [agencies]
+      x-required-permissions:
+        all: ["edit.agency"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                phone:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  nullable: true
+                address:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                  nullable: true
+                state:
+                  type: string
+                  nullable: true
+                zip:
+                  type: string
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+                active:
+                  type: boolean
+      responses:
+        "200":
+          description: "Updated agency"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # ------------------------------------------------------------------
   # AUDIT LOG
