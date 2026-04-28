@@ -1,0 +1,3665 @@
+openapi: "3.0.3"
+
+info:
+  title: "ISN Replacement API — Scheduling Slice"
+  version: "0.1.0"
+  description: |
+    REST API contract for the ISN replacement system (isn-killer), scheduling slice.
+
+    ## Conventions
+
+    ### Authentication
+    Session-based only. Passport.js local strategy (email + password). Sessions stored
+    in Postgres via connect-pg-simple. No bearer tokens for human-facing API surfaces.
+    Cookies: httpOnly, secure (production), sameSite=strict. All requests must carry
+    the session cookie. MFA verification is required for sensitive permission grants
+    when accounts.config.security.requireMfaForPermissionGrants=true.
+
+    ### Permission model
+    Every endpoint declares required permissions via the x-required-permissions extension.
+    Effective permissions = role defaults (from role_permissions) UNION per-user grants
+    MINUS per-user denies (from user_permission_overrides). See 06-security-spec.md S11.
+
+    ```yaml
+    x-required-permissions:
+      all: ["edit.inspection.assign"]       # all listed permissions required
+      any: ["manage.refund", "override.X"]  # at least one required
+    ```
+
+    ### PII masking
+    Endpoints returning customer/property PII apply runtime masking based on the
+    requesting user's effective permissions. Schemas mark PII fields with x-pii-fields.
+    Users with view.customer.pii (or a group containing it) receive unmasked values;
+    others receive masked strings (e.g., email: "j****@example.com",
+    phone: "***-***-1234"). See 06-security-spec.md S11 PII masking pattern.
+
+    ### Error envelope
+    All errors use the following shape:
+    ```json
+    {
+      "error": {
+        "code": "permission_denied",
+        "message": "Human-readable message",
+        "details": {},
+        "requestId": "<uuid>"
+      }
+    }
+    ```
+    Common error codes: validation_failed, unauthenticated, permission_denied,
+    not_found, conflict, semantic_error, rate_limited, internal_error.
+
+    ### Status codes
+    - 200 Success
+    - 201 Created
+    - 204 No content
+    - 400 Validation failure
+    - 401 Unauthenticated
+    - 403 Forbidden (user can see entity exists but lacks specific action permission)
+    - 404 Not found / cross-account hide / no-permission hide (see Security: 404-over-403)
+    - 409 Conflict (unique constraint, optimistic concurrency)
+    - 422 Semantic validation failure
+    - 429 Rate limited
+    - 500 Server error
+
+    ### Security: 404 over 403 for cross-account and no-permission hides
+    CRITICAL: When a user queries an entity that exists in another account, or an
+    entity they cannot see exists at all (RLS hides it), respond 404 — NEVER 403.
+    403 is only returned when the user can verify the entity exists but lacks
+    permission for the specific action (e.g., they can GET it but not DELETE it).
+    This prevents account enumeration.
+
+    ### Pagination
+    Cursor-based on all unbounded lists. No offset pagination anywhere.
+    Query params: cursor (opaque base64), pageSize (default 50, max 200).
+    Response envelope:
+    ```json
+    {
+      "data": [...],
+      "pagination": { "nextCursor": "<base64>|null", "hasMore": true, "pageSize": 50 }
+    }
+    ```
+    Bounded config lists (services, businesses, users within a business) use the
+    same cursor shape but are typically small enough to return in one page.
+
+    ### Audit logging
+    Every state-changing endpoint produces an audit_log row. The API does not expose
+    this in each endpoint description; it is a framework-level concern. Log entries
+    include: action, outcome, entityType, entityId, userId, accountId, businessId,
+    sessionId, requestId, ipAddress, userAgent, changes.
+
+    ### on_hold scheduledAt sentinel
+    Inspections with status=on_hold have scheduledAt=9999-12-31T23:59:59Z
+    (ON_HOLD_PLACEHOLDER_AT constant). The API serialization layer detects this
+    sentinel and returns scheduledAt=null and a pendingSchedule=true flag in
+    inspection responses. Clients must not render year-9999 dates.
+
+    ### Cancellation vs soft-delete
+    POST /api/inspections/{id}/cancel — operational cancellation (status=cancelled,
+    sets cancelledAt/cancelledBy/cancelReason). Requires cancel.inspection permission.
+    DELETE /api/inspections/{id} — administrative soft-delete (sets deletedAt/deletedBy/
+    deleteReason). Requires delete.inspection permission. These are distinct operations.
+
+    ### Rate limiting
+    Responses include X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
+    headers. Specific limits are operational tuning; see open question #6 in handoff.md.
+
+servers:
+  - url: "https://{host}/api"
+    description: "Application server"
+    variables:
+      host:
+        default: "localhost:5000"
+
+# ============================================================
+# SECURITY SCHEMES
+# ============================================================
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+      description: "Server-side session cookie. Obtained via POST /api/auth/login."
+
+  # ============================================================
+  # SHARED PARAMETERS
+  # ============================================================
+  parameters:
+    cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+      description: "Opaque base64-encoded cursor for cursor pagination."
+    pageSize:
+      name: pageSize
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      description: "Page size. Clamped to 200."
+    pathId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    businessId:
+      name: businessId
+      in: query
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: "Active business context. Must be a business the user belongs to."
+
+  # ============================================================
+  # SHARED SCHEMAS
+  # ============================================================
+  schemas:
+
+    # --- Envelopes ---
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum:
+                - validation_failed
+                - unauthenticated
+                - permission_denied
+                - not_found
+                - conflict
+                - semantic_error
+                - rate_limited
+                - system_user_login_attempted
+                - internal_error
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+            requestId:
+              type: string
+              format: uuid
+
+    PaginationMeta:
+      type: object
+      required: [nextCursor, hasMore, pageSize]
+      properties:
+        nextCursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        pageSize:
+          type: integer
+
+    # --- Identity ---
+
+    AccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, inactive]
+        planTier:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BusinessResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        type:
+          type: string
+          enum: [inspection, pool, pest, other]
+        status:
+          type: string
+          enum: [active, inactive]
+        logoUrl:
+          type: string
+          nullable: true
+        primaryColor:
+          type: string
+          nullable: true
+        address1:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        state:
+          type: string
+          nullable: true
+        zip:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        website:
+          type: string
+          nullable: true
+        displayOrder:
+          type: integer
+        config:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserResponse:
+      type: object
+      x-pii-fields: [email, username, firstName, lastName, displayName, phone, mobile, fax, address1, address2, city, state, zip, county, license, photoUrl]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          x-pii: contact_email
+        username:
+          type: string
+          nullable: true
+          x-pii: name
+        firstName:
+          type: string
+          nullable: true
+          x-pii: name
+        lastName:
+          type: string
+          nullable: true
+          x-pii: name
+        displayName:
+          type: string
+          x-pii: name
+        phone:
+          type: string
+          nullable: true
+          x-pii: phone
+        mobile:
+          type: string
+          nullable: true
+          x-pii: phone
+        address1:
+          type: string
+          nullable: true
+          x-pii: address
+        city:
+          type: string
+          nullable: true
+          x-pii: address
+        state:
+          type: string
+          nullable: true
+          x-pii: address
+        zip:
+          type: string
+          nullable: true
+          x-pii: address
+        license:
+          type: string
+          nullable: true
+          x-pii: government_id
+        photoUrl:
+          type: string
+          nullable: true
+          x-pii: name
+        status:
+          type: string
+          enum: [active, inactive, invited]
+        isSystem:
+          type: boolean
+        emailVerifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        smsOptIn:
+          type: boolean
+        emailOptIn:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserRoleResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [owner, operations_manager, dispatcher, technician, client_success, bookkeeper, viewer]
+        grantedAt:
+          type: string
+          format: date-time
+        grantedBy:
+          type: string
+          format: uuid
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        expirationReason:
+          type: string
+          nullable: true
+
+    EffectivePermissionsResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        permissions:
+          type: array
+          items:
+            type: string
+          description: "All resolved permission keys after role defaults + grants - denies."
+        roleDefaults:
+          type: array
+          items:
+            type: string
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserPermissionOverrideResponse"
+        denies:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserPermissionOverrideResponse"
+
+    UserPermissionOverrideResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Synthetic composite key representation for reference."
+        userId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        permissionKey:
+          type: string
+          nullable: true
+        groupKey:
+          type: string
+          nullable: true
+        effect:
+          type: string
+          enum: [grant, deny]
+        reason:
+          type: string
+          nullable: true
+        grantedBy:
+          type: string
+          format: uuid
+          nullable: true
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    # --- Customers & Properties ---
+
+    CustomerResponse:
+      type: object
+      x-pii-fields: [email, phoneMobile, phoneHome, phoneWork, address1, address2, city, state, zip, notes]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          x-pii: name
+        firstName:
+          type: string
+          nullable: true
+          x-pii: name
+        lastName:
+          type: string
+          nullable: true
+          x-pii: name
+        email:
+          type: string
+          nullable: true
+          x-pii: contact_email
+        phoneMobile:
+          type: string
+          nullable: true
+          x-pii: phone
+        phoneHome:
+          type: string
+          nullable: true
+          x-pii: phone
+        phoneWork:
+          type: string
+          nullable: true
+          x-pii: phone
+        address1:
+          type: string
+          nullable: true
+          x-pii: address
+        address2:
+          type: string
+          nullable: true
+          x-pii: address
+        city:
+          type: string
+          nullable: true
+          x-pii: address
+        state:
+          type: string
+          nullable: true
+          x-pii: address
+        zip:
+          type: string
+          nullable: true
+          x-pii: address
+        notes:
+          type: string
+          nullable: true
+          x-pii: notes
+        smsOptIn:
+          type: boolean
+        emailOptIn:
+          type: boolean
+        status:
+          type: string
+          enum: [active, inactive]
+        businessUsage:
+          type: array
+          description: "Which businesses have served this customer (customer_businesses rows)."
+          items:
+            type: object
+            properties:
+              businessId:
+                type: string
+                format: uuid
+              businessName:
+                type: string
+              firstSeenAt:
+                type: string
+                format: date-time
+              lastActivityAt:
+                type: string
+                format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PropertyResponse:
+      type: object
+      x-pii-fields: [address1, address2, city, state, zip, county, latitude, longitude]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        address1:
+          type: string
+          x-pii: address
+        address2:
+          type: string
+          nullable: true
+          x-pii: address
+        city:
+          type: string
+          x-pii: address
+        state:
+          type: string
+          x-pii: address
+        zip:
+          type: string
+          x-pii: address
+        county:
+          type: string
+          nullable: true
+          x-pii: address
+        latitude:
+          type: number
+          nullable: true
+          x-pii: location_precise
+        longitude:
+          type: number
+          nullable: true
+          x-pii: location_precise
+        yearBuilt:
+          type: integer
+          nullable: true
+        squareFeet:
+          type: integer
+          nullable: true
+        bedrooms:
+          type: integer
+          nullable: true
+        bathrooms:
+          type: number
+          nullable: true
+        foundation:
+          type: string
+          nullable: true
+        occupancy:
+          type: string
+          nullable: true
+        propertyType:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TransactionParticipantResponse:
+      type: object
+      x-pii-fields: [email, phone, mobile]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        agencyId:
+          type: string
+          format: uuid
+          nullable: true
+        displayName:
+          type: string
+          x-pii: name
+        firstName:
+          type: string
+          nullable: true
+          x-pii: name
+        lastName:
+          type: string
+          nullable: true
+          x-pii: name
+        email:
+          type: string
+          nullable: true
+          x-pii: contact_email
+        phone:
+          type: string
+          nullable: true
+          x-pii: phone
+        mobile:
+          type: string
+          nullable: true
+          x-pii: phone
+        primaryRole:
+          type: string
+          nullable: true
+          enum: [buyer_agent, listing_agent, transaction_coordinator, escrow_officer, insurance_agent, lender, attorney, seller, other]
+        status:
+          type: string
+          enum: [active, inactive]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AgencyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        state:
+          type: string
+          nullable: true
+        zip:
+          type: string
+          nullable: true
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # --- Services ---
+
+    ServiceResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        publicDescription:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        baseFee:
+          type: string
+          description: "Decimal string, e.g. '350.00'"
+        defaultDurationMinutes:
+          type: integer
+        sequence:
+          type: integer
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # --- Technician Availability ---
+
+    TechnicianHoursResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: "0=Sunday, 6=Saturday"
+        startTime:
+          type: string
+          pattern: "^[0-2][0-9]:[0-5][0-9]$"
+          description: "HH:MM 24-hour"
+        endTime:
+          type: string
+          pattern: "^[0-2][0-9]:[0-5][0-9]$"
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveTo:
+          type: string
+          format: date-time
+          nullable: true
+
+    TechnicianTimeOffResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          nullable: true
+
+    TechnicianZipResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        zip:
+          type: string
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 5
+
+    AvailableSlotResponse:
+      type: object
+      properties:
+        inspectorId:
+          type: string
+          format: uuid
+        inspectorName:
+          type: string
+        scheduledAt:
+          type: string
+          format: date-time
+          description: "Start of the available slot (UTC)"
+        durationMinutes:
+          type: integer
+        explanation:
+          type: string
+          description: "Human-readable explanation, e.g. 'Primary territory match, 30-min buffer respected'"
+
+    # --- Inspections ---
+
+    InspectionServiceLineItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        serviceId:
+          type: string
+          format: uuid
+        serviceName:
+          type: string
+        fee:
+          type: string
+          description: "Decimal string"
+        durationMinutes:
+          type: integer
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+
+    InspectionParticipantItem:
+      type: object
+      properties:
+        participantId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          x-pii: name
+        roleInTransaction:
+          type: string
+          enum: [buyer_agent, listing_agent, transaction_coordinator, escrow_officer, insurance_agent, lender, attorney, seller, other]
+        email:
+          type: string
+          nullable: true
+          x-pii: contact_email
+        phone:
+          type: string
+          nullable: true
+          x-pii: phone
+        agencyName:
+          type: string
+          nullable: true
+
+    InspectionResponse:
+      type: object
+      x-pii-fields: [via customer and property FKs — see CustomerResponse and PropertyResponse]
+      properties:
+        id:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+        orderNumber:
+          type: string
+          description: "Format: {prefix}-{year}-{seq:06d}, e.g. SH-2026-001234"
+        status:
+          type: string
+          enum: [scheduled, confirmed, en_route, in_progress, completed, cancelled, no_show, on_hold]
+        paymentStatus:
+          type: string
+          enum: [unpaid, partial, paid, refunded, disputed]
+        signatureStatus:
+          type: string
+          enum: [unsigned, signed, expired]
+        qaStatus:
+          type: string
+          enum: [not_reviewed, in_review, approved, rejected]
+        reportReleased:
+          type: boolean
+        reportReleasedAt:
+          type: string
+          format: date-time
+          nullable: true
+        scheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Null when status=on_hold (sentinel 9999-12-31T23:59:59Z is translated
+            to null by the serialization layer). ISO 8601 UTC otherwise.
+        pendingSchedule:
+          type: boolean
+          description: "True when status=on_hold and no date is locked."
+        durationMinutes:
+          type: integer
+        leadInspector:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+        customer:
+          $ref: "#/components/schemas/CustomerResponse"
+          nullable: true
+          description: "Null when not yet linked. PII fields subject to view.customer.pii."
+        property:
+          $ref: "#/components/schemas/PropertyResponse"
+          nullable: true
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/InspectionParticipantItem"
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/InspectionServiceLineItem"
+        feeAmount:
+          type: string
+          description: "Decimal string total fee"
+        specialInstructions:
+          type: string
+          nullable: true
+          x-pii: notes
+        internalNotes:
+          type: string
+          nullable: true
+          x-pii: notes
+          description: "Only returned when user has view.inspection.internal_notes permission."
+        customFields:
+          type: object
+          additionalProperties: true
+        billToParticipantId:
+          type: string
+          format: uuid
+          nullable: true
+        source:
+          type: string
+          enum: [dispatcher, realtor_portal, client_booking, phone, email, api]
+        confirmedAt:
+          type: string
+          format: date-time
+          nullable: true
+        confirmedBy:
+          type: string
+          format: uuid
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        initialCompletedAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelReason:
+          type: string
+          nullable: true
+        rescheduleCount:
+          type: integer
+          description: "Computed from reschedule_history; not stored as a column."
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RescheduleHistoryItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        inspectionId:
+          type: string
+          format: uuid
+        previousScheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+        newScheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+        previousInspectorId:
+          type: string
+          format: uuid
+          nullable: true
+        newInspectorId:
+          type: string
+          format: uuid
+          nullable: true
+        reason:
+          type: string
+          nullable: true
+        initiatedBy:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ConflictCheckResponse:
+      type: object
+      properties:
+        hasConflict:
+          type: boolean
+        conflicts:
+          type: array
+          items:
+            type: object
+            properties:
+              inspectionId:
+                type: string
+                format: uuid
+              orderNumber:
+                type: string
+              scheduledAt:
+                type: string
+                format: date-time
+              endsAt:
+                type: string
+                format: date-time
+              overlapMinutes:
+                type: integer
+        warnings:
+          type: array
+          items:
+            type: string
+          description: "Non-blocking warnings (outside hours, outside ZIP coverage, etc.)"
+
+    # --- Audit log ---
+
+    AuditLogEntryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        businessId:
+          type: string
+          format: uuid
+          nullable: true
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        userDisplayName:
+          type: string
+          nullable: true
+        sessionId:
+          type: string
+          nullable: true
+        requestId:
+          type: string
+          format: uuid
+          nullable: true
+        action:
+          type: string
+        outcome:
+          type: string
+          enum: [success, denied, failed, partial]
+        entityType:
+          type: string
+        entityId:
+          type: string
+          format: uuid
+          nullable: true
+        changes:
+          type: object
+          nullable: true
+          description: "May contain PII snapshots. Only returned when user has view.audit_log."
+        ipAddress:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+# ============================================================
+# GLOBAL SECURITY
+# ============================================================
+security:
+  - sessionCookie: []
+
+# ============================================================
+# PATHS
+# ============================================================
+paths:
+
+  # ------------------------------------------------------------------
+  # AUTH
+  # ------------------------------------------------------------------
+
+  /auth/login:
+    post:
+      summary: "Log in with email and password"
+      operationId: authLogin
+      security: []
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+                businessId:
+                  type: string
+                  format: uuid
+                  description: "Optional. If omitted, defaults to the user's primary business (lowest joinedAt). Set by the client after login to activate the correct business context."
+      responses:
+        "200":
+          description: "Authenticated. Session cookie set."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/UserResponse"
+                  - type: object
+                    properties:
+                      activeBusiness:
+                        $ref: "#/components/schemas/BusinessResponse"
+                      effectivePermissions:
+                        type: array
+                        items:
+                          type: string
+        "400":
+          description: "Invalid email or password format"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: "Invalid credentials"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      summary: "Log out and destroy session"
+      operationId: authLogout
+      tags: [auth]
+      responses:
+        "204":
+          description: "Session destroyed"
+
+  /auth/me:
+    get:
+      summary: "Get current authenticated user with active business and permissions"
+      operationId: authMe
+      tags: [auth]
+      responses:
+        "200":
+          description: "Current user"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/UserResponse"
+                  - type: object
+                    properties:
+                      activeBusiness:
+                        $ref: "#/components/schemas/BusinessResponse"
+                      effectivePermissions:
+                        type: array
+                        items:
+                          type: string
+        "401":
+          description: "Not authenticated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/switch-business:
+    post:
+      summary: "Switch active business context in session"
+      operationId: authSwitchBusiness
+      tags: [auth]
+      x-required-permissions:
+        all: ["view.business"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [businessId]
+              properties:
+                businessId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: "Business context switched"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activeBusiness:
+                    $ref: "#/components/schemas/BusinessResponse"
+                  effectivePermissions:
+                    type: array
+                    items:
+                      type: string
+        "403":
+          description: "User does not belong to this business"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: "Business not found (or cross-account)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ------------------------------------------------------------------
+  # ACCOUNTS
+  # ------------------------------------------------------------------
+
+  /accounts/me:
+    get:
+      summary: "Get the current account"
+      operationId: getMyAccount
+      tags: [accounts]
+      x-required-permissions:
+        all: ["view.business"]
+      responses:
+        "200":
+          description: "Account record"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountResponse"
+
+    patch:
+      summary: "Update account configuration"
+      operationId: updateAccount
+      tags: [accounts]
+      x-required-permissions:
+        all: ["manage.account_config"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                config:
+                  type: object
+                  additionalProperties: true
+                  description: "Partial update to accounts.config. Merged (not replaced)."
+      responses:
+        "200":
+          description: "Updated account"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountResponse"
+        "403":
+          description: "Permission denied"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ------------------------------------------------------------------
+  # BUSINESSES
+  # ------------------------------------------------------------------
+
+  /businesses:
+    get:
+      summary: "List businesses the current user belongs to"
+      operationId: listBusinesses
+      tags: [businesses]
+      x-required-permissions:
+        all: ["view.business"]
+      responses:
+        "200":
+          description: "List of businesses, ordered by displayOrder"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BusinessResponse"
+
+    post:
+      summary: "Create a new business in the account"
+      operationId: createBusiness
+      tags: [businesses]
+      x-required-permissions:
+        all: ["manage.business"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug, type]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                  description: "URL-safe slug, unique within account"
+                type:
+                  type: string
+                  enum: [inspection, pool, pest, other]
+                logoUrl:
+                  type: string
+                  nullable: true
+                primaryColor:
+                  type: string
+                  nullable: true
+                address1:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                  nullable: true
+                state:
+                  type: string
+                  nullable: true
+                zip:
+                  type: string
+                  nullable: true
+                phone:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  nullable: true
+                website:
+                  type: string
+                  nullable: true
+                config:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: "Business created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessResponse"
+        "409":
+          description: "Slug already exists within account"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /businesses/{id}:
+    get:
+      summary: "Get a specific business"
+      operationId: getBusiness
+      tags: [businesses]
+      x-required-permissions:
+        all: ["view.business"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Business record"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update business settings"
+      operationId: updateBusiness
+      tags: [businesses]
+      x-required-permissions:
+        all: ["manage.business_config"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                logoUrl:
+                  type: string
+                  nullable: true
+                primaryColor:
+                  type: string
+                  nullable: true
+                phone:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  nullable: true
+                website:
+                  type: string
+                  nullable: true
+                displayOrder:
+                  type: integer
+                config:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: "Updated business"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessResponse"
+
+  # ------------------------------------------------------------------
+  # USERS
+  # ------------------------------------------------------------------
+
+  /users:
+    get:
+      summary: "List users in the active business"
+      operationId: listUsers
+      tags: [users]
+      x-required-permissions:
+        all: ["view.user"]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive, invited]
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Paginated user list"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+    post:
+      summary: "Invite a new user to the active business"
+      operationId: inviteUser
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, displayName, role]
+              properties:
+                email:
+                  type: string
+                  format: email
+                displayName:
+                  type: string
+                role:
+                  type: string
+                  enum: [owner, operations_manager, dispatcher, technician, client_success, bookkeeper, viewer]
+                roleExpiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: "Optional expiration for the initial role grant."
+      responses:
+        "201":
+          description: "User invited. Invitation email sent."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "409":
+          description: "Email already in use within this account"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}:
+    get:
+      summary: "Get a user"
+      operationId: getUser
+      tags: [users]
+      x-required-permissions:
+        all: ["view.user"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "User record"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update a user's profile or status"
+      operationId: updateUser
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phone:
+                  type: string
+                  nullable: true
+                mobile:
+                  type: string
+                  nullable: true
+                status:
+                  type: string
+                  enum: [active, inactive]
+                smsOptIn:
+                  type: boolean
+                emailOptIn:
+                  type: boolean
+      responses:
+        "200":
+          description: "Updated user"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+
+  /users/{id}/roles:
+    get:
+      summary: "List roles for a user in the active business"
+      operationId: listUserRoles
+      tags: [users]
+      x-required-permissions:
+        all: ["view.user.roles"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "User roles"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserRoleResponse"
+
+    post:
+      summary: "Grant a role to a user in the active business"
+      operationId: grantUserRole
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user.roles"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [owner, operations_manager, dispatcher, technician, client_success, bookkeeper, viewer]
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                expirationReason:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: "Role granted"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRoleResponse"
+        "409":
+          description: "Role already held"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}/roles/{role}:
+    delete:
+      summary: "Revoke a role from a user"
+      operationId: revokeUserRole
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user.roles"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+        - name: role
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: "Role revoked"
+        "404":
+          description: "Role not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}/permissions:
+    get:
+      summary: "Get effective permissions for a user in the active business"
+      operationId: getUserEffectivePermissions
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user.permissions"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Effective permissions breakdown"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EffectivePermissionsResponse"
+
+  /users/{id}/permission-overrides:
+    post:
+      summary: "Grant or deny a specific permission (or group) for a user"
+      operationId: createPermissionOverride
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user.permissions"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [effect]
+              properties:
+                permissionKey:
+                  type: string
+                  description: "One of permissionKey or groupKey required."
+                  nullable: true
+                groupKey:
+                  type: string
+                  nullable: true
+                effect:
+                  type: string
+                  enum: [grant, deny]
+                reason:
+                  type: string
+                  description: "Required for sensitive permissions."
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        "201":
+          description: "Override created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPermissionOverrideResponse"
+        "400":
+          description: "Missing reason for sensitive permission, or both/neither target specified"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}/permission-overrides/{overrideId}:
+    delete:
+      summary: "Revoke a permission override"
+      operationId: deletePermissionOverride
+      tags: [users]
+      x-required-permissions:
+        all: ["manage.user.permissions"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+        - name: overrideId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: "Override revoked"
+        "404":
+          description: "Override not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ------------------------------------------------------------------
+  # CUSTOMERS
+  # ------------------------------------------------------------------
+
+  /customers:
+    get:
+      summary: "List customers in the active account (scoped to businesses the user can see)"
+      operationId: listCustomers
+      tags: [customers]
+      x-required-permissions:
+        all: ["view.customer"]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: "Search by name, email, or phone"
+        - name: businessId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: "Filter to customers associated with this business"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Paginated customer list. PII fields masked unless view.customer.pii."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CustomerResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+    post:
+      summary: "Create a customer"
+      operationId: createCustomer
+      tags: [customers]
+      x-required-permissions:
+        all: ["create.customer"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName:
+                  type: string
+                firstName:
+                  type: string
+                  nullable: true
+                lastName:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  format: email
+                  nullable: true
+                phoneMobile:
+                  type: string
+                  nullable: true
+                phoneHome:
+                  type: string
+                  nullable: true
+                address1:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                  nullable: true
+                state:
+                  type: string
+                  nullable: true
+                zip:
+                  type: string
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+                smsOptIn:
+                  type: boolean
+                emailOptIn:
+                  type: boolean
+      responses:
+        "201":
+          description: "Customer created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerResponse"
+
+  /customers/{id}:
+    get:
+      summary: "Get a customer"
+      operationId: getCustomer
+      tags: [customers]
+      x-required-permissions:
+        all: ["view.customer"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Customer record. PII fields masked unless view.customer.pii."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update a customer"
+      operationId: updateCustomer
+      tags: [customers]
+      x-required-permissions:
+        all: ["edit.customer"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                firstName:
+                  type: string
+                  nullable: true
+                lastName:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  nullable: true
+                phoneMobile:
+                  type: string
+                  nullable: true
+                phoneHome:
+                  type: string
+                  nullable: true
+                address1:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                  nullable: true
+                state:
+                  type: string
+                  nullable: true
+                zip:
+                  type: string
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+                smsOptIn:
+                  type: boolean
+                emailOptIn:
+                  type: boolean
+      responses:
+        "200":
+          description: "Updated customer"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerResponse"
+
+  # ------------------------------------------------------------------
+  # PROPERTIES
+  # ------------------------------------------------------------------
+
+  /properties:
+    get:
+      summary: "List properties in the active account"
+      operationId: listProperties
+      tags: [properties]
+      x-required-permissions:
+        all: ["view.property"]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: "Search by address"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Paginated property list"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PropertyResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+    post:
+      summary: "Create a property"
+      operationId: createProperty
+      tags: [properties]
+      x-required-permissions:
+        all: ["create.property"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address1, city, state, zip]
+              properties:
+                address1:
+                  type: string
+                address2:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                state:
+                  type: string
+                zip:
+                  type: string
+                county:
+                  type: string
+                  nullable: true
+                yearBuilt:
+                  type: integer
+                  nullable: true
+                squareFeet:
+                  type: integer
+                  nullable: true
+                bedrooms:
+                  type: integer
+                  nullable: true
+                bathrooms:
+                  type: number
+                  nullable: true
+                foundation:
+                  type: string
+                  nullable: true
+                occupancy:
+                  type: string
+                  nullable: true
+                propertyType:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: "Property created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+
+  /properties/{id}:
+    get:
+      summary: "Get a property"
+      operationId: getProperty
+      tags: [properties]
+      x-required-permissions:
+        all: ["view.property"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Property record"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update a property"
+      operationId: updateProperty
+      tags: [properties]
+      x-required-permissions:
+        all: ["edit.property"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address1:
+                  type: string
+                address2:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                state:
+                  type: string
+                zip:
+                  type: string
+                yearBuilt:
+                  type: integer
+                  nullable: true
+                squareFeet:
+                  type: integer
+                  nullable: true
+                bedrooms:
+                  type: integer
+                  nullable: true
+                bathrooms:
+                  type: number
+                  nullable: true
+                foundation:
+                  type: string
+                  nullable: true
+                occupancy:
+                  type: string
+                  nullable: true
+                propertyType:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: "Updated property"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PropertyResponse"
+
+  # ------------------------------------------------------------------
+  # SERVICES
+  # ------------------------------------------------------------------
+
+  /services:
+    get:
+      summary: "List services for the active business"
+      operationId: listServices
+      tags: [services]
+      x-required-permissions:
+        all: ["view.business"]
+      parameters:
+        - name: active
+          in: query
+          schema:
+            type: boolean
+          description: "Filter by active flag. Omit to return all."
+      responses:
+        "200":
+          description: "Service list ordered by sequence"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceResponse"
+
+    post:
+      summary: "Create a service"
+      operationId: createService
+      tags: [services]
+      x-required-permissions:
+        all: ["manage.service"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, baseFee, defaultDurationMinutes]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+                publicDescription:
+                  type: string
+                  nullable: true
+                category:
+                  type: string
+                  nullable: true
+                baseFee:
+                  type: string
+                  description: "Decimal string"
+                defaultDurationMinutes:
+                  type: integer
+                sequence:
+                  type: integer
+                  default: 100
+                active:
+                  type: boolean
+                  default: true
+      responses:
+        "201":
+          description: "Service created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceResponse"
+
+  /services/{id}:
+    patch:
+      summary: "Update a service"
+      operationId: updateService
+      tags: [services]
+      x-required-permissions:
+        all: ["manage.service"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+                publicDescription:
+                  type: string
+                  nullable: true
+                category:
+                  type: string
+                  nullable: true
+                baseFee:
+                  type: string
+                defaultDurationMinutes:
+                  type: integer
+                sequence:
+                  type: integer
+                active:
+                  type: boolean
+      responses:
+        "200":
+          description: "Updated service"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceResponse"
+
+  # ------------------------------------------------------------------
+  # TECHNICIAN AVAILABILITY
+  # ------------------------------------------------------------------
+
+  /technicians/{userId}/hours:
+    get:
+      summary: "List recurring hours for a technician"
+      operationId: listTechnicianHours
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["view.business"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "Technician hours"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TechnicianHoursResponse"
+
+    post:
+      summary: "Add a recurring shift"
+      operationId: createTechnicianHours
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["manage.technician_availability"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dayOfWeek, startTime, endTime]
+              properties:
+                dayOfWeek:
+                  type: integer
+                  minimum: 0
+                  maximum: 6
+                startTime:
+                  type: string
+                endTime:
+                  type: string
+                effectiveFrom:
+                  type: string
+                  format: date-time
+                  nullable: true
+                effectiveTo:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        "201":
+          description: "Hours created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianHoursResponse"
+
+  /technicians/{userId}/hours/{id}:
+    delete:
+      summary: "Remove a recurring shift"
+      operationId: deleteTechnicianHours
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["manage.technician_availability"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "204":
+          description: "Shift removed"
+
+  /technicians/{userId}/time-off:
+    get:
+      summary: "List time-off windows for a technician"
+      operationId: listTechnicianTimeOff
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["view.business"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: "Time-off windows"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TechnicianTimeOffResponse"
+
+    post:
+      summary: "Add a time-off window"
+      operationId: createTechnicianTimeOff
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["manage.technician_availability"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startsAt, endsAt]
+              properties:
+                startsAt:
+                  type: string
+                  format: date-time
+                endsAt:
+                  type: string
+                  format: date-time
+                reason:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: "Time-off created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianTimeOffResponse"
+
+  /technicians/{userId}/time-off/{id}:
+    delete:
+      summary: "Remove a time-off window"
+      operationId: deleteTechnicianTimeOff
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["manage.technician_availability"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "204":
+          description: "Time-off removed"
+
+  /technicians/{userId}/zips:
+    get:
+      summary: "List ZIP coverage for a technician"
+      operationId: listTechnicianZips
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["view.business"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "ZIP coverage list"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TechnicianZipResponse"
+
+    post:
+      summary: "Add a ZIP to technician coverage"
+      operationId: addTechnicianZip
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["manage.technician_availability"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [zip]
+              properties:
+                zip:
+                  type: string
+                priority:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                  default: 1
+      responses:
+        "201":
+          description: "ZIP added"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TechnicianZipResponse"
+
+  /technicians/{userId}/zips/{zip}:
+    delete:
+      summary: "Remove a ZIP from technician coverage"
+      operationId: deleteTechnicianZip
+      tags: [technician-availability]
+      x-required-permissions:
+        all: ["manage.technician_availability"]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: zip
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: "ZIP removed"
+
+  # ------------------------------------------------------------------
+  # SLOT FINDER
+  # ------------------------------------------------------------------
+
+  /calendar/available-slots:
+    get:
+      summary: "Find available scheduling slots for one or all technicians"
+      operationId: getAvailableSlots
+      tags: [calendar]
+      x-required-permissions:
+        all: ["view.calendar", "view.inspection"]
+      parameters:
+        - name: inspectorId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: "Specific technician. Omit for cross-inspector search (all active technicians in business)."
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: "Start of search window (UTC)"
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: "End of search window (UTC)"
+        - name: serviceIds
+          in: query
+          schema:
+            type: string
+          description: "Comma-separated service UUIDs to drive duration calculation"
+        - name: zip
+          in: query
+          schema:
+            type: string
+          description: "Filter to technicians whose ZIP coverage includes this ZIP"
+        - name: durationMinutes
+          in: query
+          schema:
+            type: integer
+          description: "Override computed duration. If omitted, derived from serviceIds."
+      responses:
+        "200":
+          description: "Available slots"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AvailableSlotResponse"
+                  searchMeta:
+                    type: object
+                    properties:
+                      from:
+                        type: string
+                        format: date-time
+                      to:
+                        type: string
+                        format: date-time
+                      durationMinutes:
+                        type: integer
+                      techniciansSearched:
+                        type: integer
+
+  # ------------------------------------------------------------------
+  # INSPECTIONS
+  # ------------------------------------------------------------------
+
+  /inspections:
+    get:
+      summary: "List inspections in the active business"
+      operationId: listInspections
+      tags: [inspections]
+      x-required-permissions:
+        all: ["view.inspection"]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+          description: "Comma-separated status values to filter. e.g. scheduled,confirmed"
+        - name: inspectorId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: customerId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: "scheduledAt >= from"
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: "scheduledAt <= to"
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: "Search by order number or property address"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Paginated inspection list. PII via customer/property is masked unless view.customer.pii."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InspectionResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+    post:
+      summary: "Create (book) a new inspection"
+      operationId: createInspection
+      tags: [inspections]
+      x-required-permissions:
+        all: ["create.inspection", "view.customer", "view.property"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceIds, feeAmount]
+              properties:
+                customerId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                propertyId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                leadInspectorId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                scheduledAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: "Null creates on_hold inspection."
+                durationMinutes:
+                  type: integer
+                  nullable: true
+                  description: "Overrides service-derived duration."
+                serviceIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: "Services to attach as line items."
+                feeAmount:
+                  type: string
+                  description: "Decimal string total fee (dispatcher-confirmed, may override sum of service base fees)."
+                specialInstructions:
+                  type: string
+                  nullable: true
+                internalNotes:
+                  type: string
+                  nullable: true
+                source:
+                  type: string
+                  enum: [dispatcher, realtor_portal, client_booking, phone, email, api]
+                  default: dispatcher
+                billToParticipantId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                participants:
+                  type: array
+                  items:
+                    type: object
+                    required: [participantId, roleInTransaction]
+                    properties:
+                      participantId:
+                        type: string
+                        format: uuid
+                      roleInTransaction:
+                        type: string
+                        enum: [buyer_agent, listing_agent, transaction_coordinator, escrow_officer, insurance_agent, lender, attorney, seller, other]
+      responses:
+        "201":
+          description: "Inspection created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+        "409":
+          description: "Conflict (inspector already booked, order number collision)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: "Semantic error (outside business hours, invalid status transition)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /inspections/stats:
+    get:
+      summary: "Dashboard statistics for the active business"
+      operationId: getInspectionStats
+      tags: [inspections]
+      x-required-permissions:
+        all: ["view.dashboard", "view.inspection"]
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: "Aggregated statistics"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalInspections:
+                    type: integer
+                  byStatus:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  byPaymentStatus:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  bySignatureStatus:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  reportsReleased:
+                    type: integer
+                  totalRevenue:
+                    type: string
+                    description: "Decimal string. Only returned when user has view.financial."
+                  totalOutstanding:
+                    type: string
+                    description: "Decimal string. Only returned when user has view.financial."
+
+  /inspections/conflicts:
+    get:
+      summary: "Check inspector scheduling conflicts for a proposed slot"
+      operationId: checkConflicts
+      tags: [inspections]
+      x-required-permissions:
+        all: ["view.inspection", "view.calendar"]
+      parameters:
+        - name: inspectorId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scheduledAt
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: durationMinutes
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: excludeInspectionId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: "Exclude this inspection from conflict check (for reschedule scenarios)."
+      responses:
+        "200":
+          description: "Conflict check result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConflictCheckResponse"
+
+  /inspections/{id}:
+    get:
+      summary: "Get a single inspection"
+      operationId: getInspection
+      tags: [inspections]
+      x-required-permissions:
+        all: ["view.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Inspection. PII masked unless view.customer.pii. internalNotes masked unless view.inspection.internal_notes."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+        "404":
+          description: "Not found (or cross-account hide)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update inspection fields (general edits)"
+      operationId: updateInspection
+      tags: [inspections]
+      x-required-permissions:
+        all: ["edit.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                specialInstructions:
+                  type: string
+                  nullable: true
+                internalNotes:
+                  type: string
+                  nullable: true
+                billToParticipantId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                feeAmount:
+                  type: string
+                  nullable: true
+                customFields:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: "Updated inspection"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+
+    delete:
+      summary: "Soft-delete an inspection (administrative removal, distinct from cancel)"
+      operationId: deleteInspection
+      tags: [inspections]
+      x-required-permissions:
+        all: ["delete.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        "204":
+          description: "Soft-deleted"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /inspections/{id}/assign:
+    patch:
+      summary: "Assign or reassign the lead inspector"
+      operationId: assignInspector
+      tags: [inspections]
+      x-required-permissions:
+        all: ["edit.inspection.assign"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inspectorId]
+              properties:
+                inspectorId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                  description: "Null to unassign."
+      responses:
+        "200":
+          description: "Inspector assigned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+        "409":
+          description: "Conflict with inspector's schedule"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - type: object
+                    properties:
+                      conflicts:
+                        $ref: "#/components/schemas/ConflictCheckResponse"
+
+  /inspections/{id}/reschedule:
+    post:
+      summary: "Reschedule an inspection (change date/time, optionally change inspector)"
+      operationId: rescheduleInspection
+      tags: [inspections]
+      x-required-permissions:
+        all: ["edit.inspection.reschedule"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                scheduledAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: "Null transitions to on_hold."
+                durationMinutes:
+                  type: integer
+                  nullable: true
+                inspectorId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: "Rescheduled. A reschedule_history row is created."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+        "422":
+          description: "Conflict or outside business hours (warn-not-block; conflict info included)"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - type: object
+                    properties:
+                      conflicts:
+                        $ref: "#/components/schemas/ConflictCheckResponse"
+
+  /inspections/{id}/cancel:
+    post:
+      summary: "Cancel an inspection (operational state; sets status=cancelled)"
+      operationId: cancelInspection
+      tags: [inspections]
+      x-required-permissions:
+        all: ["cancel.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cancelReason]
+              properties:
+                cancelReason:
+                  type: string
+      responses:
+        "200":
+          description: "Cancelled"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+
+  /inspections/{id}/status:
+    patch:
+      summary: "Transition inspection status (inspector-facing: en_route, in_progress, completed, no_show)"
+      operationId: updateInspectionStatus
+      tags: [inspections]
+      x-required-permissions:
+        all: ["edit.inspection.status"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [confirmed, en_route, in_progress, completed, no_show]
+                  description: "allowed transitions per state machine; invalid transitions return 422."
+      responses:
+        "200":
+          description: "Status updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+        "422":
+          description: "Invalid status transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /inspections/{id}/release:
+    post:
+      summary: "Mark report as released (requires payment, signature, and uploaded report)"
+      operationId: releaseReport
+      tags: [inspections]
+      x-required-permissions:
+        all: ["release.report"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Report released"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+        "422":
+          description: "Release conditions not met (unpaid, unsigned, or no report)"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - type: object
+                    properties:
+                      blockedReasons:
+                        type: array
+                        items:
+                          type: string
+
+  /inspections/{id}/release-override:
+    post:
+      summary: "Release report despite unmet conditions (admin override)"
+      operationId: releaseReportOverride
+      tags: [inspections]
+      x-required-permissions:
+        all: ["override.report_release_gate"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: "Report released via override"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionResponse"
+
+  /inspections/{id}/reschedule-history:
+    get:
+      summary: "List reschedule history for an inspection"
+      operationId: listRescheduleHistory
+      tags: [inspections]
+      x-required-permissions:
+        all: ["view.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Reschedule history in chronological order"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RescheduleHistoryItem"
+
+  /inspections/{id}/services:
+    get:
+      summary: "List service line items on an inspection"
+      operationId: listInspectionServices
+      tags: [inspections]
+      x-required-permissions:
+        all: ["view.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Service line items"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InspectionServiceLineItem"
+
+    post:
+      summary: "Add a service line item to an inspection"
+      operationId: addInspectionService
+      tags: [inspections]
+      x-required-permissions:
+        all: ["edit.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceId, fee]
+              properties:
+                serviceId:
+                  type: string
+                  format: uuid
+                fee:
+                  type: string
+                durationMinutes:
+                  type: integer
+                  nullable: true
+                notes:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: "Line item added"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectionServiceLineItem"
+
+  /inspection-services/{id}:
+    delete:
+      summary: "Remove a service line item from an inspection"
+      operationId: deleteInspectionService
+      tags: [inspections]
+      x-required-permissions:
+        all: ["edit.inspection"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "204":
+          description: "Line item removed"
+
+  # ------------------------------------------------------------------
+  # TRANSACTION PARTICIPANTS AND AGENCIES
+  # ------------------------------------------------------------------
+
+  /participants:
+    get:
+      summary: "List transaction participants in the active account"
+      operationId: listParticipants
+      tags: [participants]
+      x-required-permissions:
+        all: ["view.transaction_participant"]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: "Search by name or email"
+        - name: primaryRole
+          in: query
+          schema:
+            type: string
+        - name: agencyId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Participants. PII masked unless view.customer.pii."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TransactionParticipantResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+    post:
+      summary: "Create a transaction participant"
+      operationId: createParticipant
+      tags: [participants]
+      x-required-permissions:
+        all: ["create.transaction_participant"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                agencyId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                displayName:
+                  type: string
+                firstName:
+                  type: string
+                  nullable: true
+                lastName:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  nullable: true
+                phone:
+                  type: string
+                  nullable: true
+                mobile:
+                  type: string
+                  nullable: true
+                primaryRole:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: "Participant created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionParticipantResponse"
+
+  /participants/{id}:
+    get:
+      summary: "Get a transaction participant"
+      operationId: getParticipant
+      tags: [participants]
+      x-required-permissions:
+        all: ["view.transaction_participant"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      responses:
+        "200":
+          description: "Participant. PII masked unless view.customer.pii."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionParticipantResponse"
+        "404":
+          description: "Not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      summary: "Update a transaction participant"
+      operationId: updateParticipant
+      tags: [participants]
+      x-required-permissions:
+        all: ["edit.transaction_participant"]
+      parameters:
+        - $ref: "#/components/parameters/pathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agencyId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                displayName:
+                  type: string
+                email:
+                  type: string
+                  nullable: true
+                phone:
+                  type: string
+                  nullable: true
+                primaryRole:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: "Updated participant"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionParticipantResponse"
+
+  /agencies:
+    get:
+      summary: "List agencies in the active account"
+      operationId: listAgencies
+      tags: [agencies]
+      x-required-permissions:
+        all: ["view.agency"]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: "Search by name"
+        - name: active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: "Agency list"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgencyResponse"
+
+    post:
+      summary: "Create an agency"
+      operationId: createAgency
+      tags: [agencies]
+      x-required-permissions:
+        all: ["edit.agency"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                phone:
+                  type: string
+                  nullable: true
+                email:
+                  type: string
+                  nullable: true
+                address:
+                  type: string
+                  nullable: true
+                city:
+                  type: string
+                  nullable: true
+                state:
+                  type: string
+                  nullable: true
+                zip:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: "Agency created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyResponse"
+
+  # ------------------------------------------------------------------
+  # AUDIT LOG
+  # ------------------------------------------------------------------
+
+  /audit-log:
+    get:
+      summary: "Query audit log"
+      operationId: queryAuditLog
+      tags: [audit]
+      x-required-permissions:
+        all: ["view.audit_log"]
+      parameters:
+        - name: entityType
+          in: query
+          schema:
+            type: string
+        - name: entityId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: outcome
+          in: query
+          schema:
+            type: string
+            enum: [success, denied, failed, partial]
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Audit log entries, newest first."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLogEntryResponse"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+  # ------------------------------------------------------------------
+  # CROSS-BUSINESS REPORTS (owner-only)
+  # ------------------------------------------------------------------
+
+  /reports/cross-business-customers:
+    get:
+      summary: "Customers who have used more than one business in the account"
+      operationId: crossBusinessCustomers
+      x-status: "current"
+      tags: [reports]
+      x-required-permissions:
+        all: ["view.cross_business", "view.customer", "view.financial"]
+      parameters:
+        - name: minBusinesses
+          in: query
+          schema:
+            type: integer
+            default: 2
+          description: "Minimum number of distinct businesses to qualify"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: "Customers with multi-business activity. PII masked unless view.customer.pii."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/CustomerResponse"
+                        - type: object
+                          properties:
+                            businessUsage:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  businessId:
+                                    type: string
+                                    format: uuid
+                                  businessName:
+                                    type: string
+                                  firstSeenAt:
+                                    type: string
+                                    format: date-time
+                                  lastActivityAt:
+                                    type: string
+                                    format: date-time
+                                  totalSpend:
+                                    type: string
+                                    nullable: true
+                                    description: "Only populated when user has view.financial."
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+
+  # ------------------------------------------------------------------
+  # HEALTH / METADATA
+  # ------------------------------------------------------------------
+
+  /health:
+    get:
+      summary: "Health check"
+      operationId: healthCheck
+      security: []
+      tags: [meta]
+      responses:
+        "200":
+          description: "Healthy"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  version:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+
+# ============================================================
+# TAGS
+# ============================================================
+tags:
+  - name: auth
+    description: "Authentication and session management"
+  - name: accounts
+    description: "Account-level settings (owner-scoped)"
+  - name: businesses
+    description: "Businesses within the account"
+  - name: users
+    description: "User management, roles, and permission overrides"
+  - name: customers
+    description: "Customer records (shared across businesses within account)"
+  - name: properties
+    description: "Property records (shared across businesses within account)"
+  - name: participants
+    description: "Transaction participants (realtors, TCs, lenders, attorneys)"
+  - name: agencies
+    description: "Brokerages and similar organizations"
+  - name: services
+    description: "Services catalog per business"
+  - name: technician-availability
+    description: "Technician hours, time-off, ZIP coverage, service duration overrides"
+  - name: calendar
+    description: "Available slot finder"
+  - name: inspections
+    description: "Inspection lifecycle management"
+  - name: audit
+    description: "Audit log queries"
+  - name: reports
+    description: "Cross-business and financial reports (owner-only)"
+  - name: meta
+    description: "Health and metadata endpoints"
+
+# ============================================================
+# OPEN QUESTIONS DEFERRED TO IMPLEMENTATION
+# (marked here for traceability)
+# ============================================================
+# 1. Realtor portal auth — future; endpoints not yet defined
+# 2. Client portal auth — future; endpoints not yet defined
+# 3. WebSocket for dispatcher dashboard — REST+poll today
+# 4. Drive-time integration — static hints only, no provider yet
+# 5. Slot algorithm cache backend — implementation detail
+# 6. Bulk operation rate limits — operational tuning, headers present
+# 7. No-show fee policy — per-business config, endpoint shape TBD
+# 8. Cross-business dashboard UNION — query strategy is implementation detail
+# 9. Custom fields UI surfacing rules — raw jsonb returned, UI decides
+# 10. Field-level encryption (S3) — deferred; masking pattern in use today
+# 11. Bookkeeper owner-notification threshold — configurable, defaults TBD
