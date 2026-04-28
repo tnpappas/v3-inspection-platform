@@ -107,7 +107,7 @@ This is captured in `TOOLS.md` and is non-negotiable going forward.
 
 ## Next deliverable: Spec 02 (API contract)
 
-**File path:** `projects/isn-replacement/specs/02-api-contract.draft.yaml` (locked to `02-api-contract.yaml` after review).
+**File path:** `projects/isn-replacement/specs/02-api-contract.yaml` (locked to `02-api-contract.yaml` after review).
 
 **Format:** OpenAPI 3.0 YAML.
 
