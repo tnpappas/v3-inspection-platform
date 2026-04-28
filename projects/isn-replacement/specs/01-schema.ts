@@ -1,5 +1,5 @@
 /**
- * 01-schema.ts (v3.1.1, licensing-ready + RBAC + system user) — LOCKED 2026-04-27
+ * 01-schema.ts (v3.1.2, licensing-ready + RBAC + system user + rescheudle dedup) — LOCKED 2026-04-27
  *
  * STATUS: LOCKED. Canonical schema for the rebuild. Subsequent changes follow
  * the migration-plan workflow (additive migrations, backwards-compatible
@@ -13,6 +13,10 @@
  * v3.1.1 additions (2026-04-27 21:46 UTC): users.is_system boolean for the
  * per-account system user pattern. Additive only. See 06-security-spec.md S11
  * "System user pattern" subsection.
+ * v3.1.2 additions (2026-04-28 14:56 UTC): unique index on reschedule_history
+ * (inspection_id, previous_scheduled_at, new_scheduled_at). Enables idempotent
+ * migration re-runs via ON CONFLICT DO NOTHING. Also defense-in-depth against
+ * accidental duplicate reschedule entries from any source. Additive only.
  * Predecessor drafts preserved as `01-schema.v1.draft.ts.superseded` and
  * `01-schema.v2.draft.ts.superseded` for design history.
  *
@@ -1336,7 +1340,8 @@ export const inspectionServices = pgTable("inspection_services", {
 // Reschedule history (D3: scheduled_at-based)
 // Table: reschedule_history
 // Security:      No direct PII. RLS: account-and-business-scoped via parent inspections FK.
-// Scalability:   Index on (inspection_id). Expected row count at 10x: ~60,000/year per account (10% of inspections reschedule once).
+// Scalability:   Indexes on (inspection_id) and unique on (inspection_id, previous_scheduled_at,
+//                new_scheduled_at). Expected row count at 10x: ~60,000/year per account.
 // Multi-business: SCOPED via parent inspections.
 export const rescheduleHistory = pgTable("reschedule_history", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1350,6 +1355,17 @@ export const rescheduleHistory = pgTable("reschedule_history", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   byInspection: index("reschedule_history_inspection_idx").on(t.inspectionId),
+  // v3.1.2: unique constraint on the natural business key.
+  // Enables idempotent migration re-runs via ON CONFLICT DO NOTHING.
+  // Also prevents accidental duplicate reschedule entries from any code path.
+  // If migration prep reveals real collision scenarios (two reschedules with
+  // identical from/to timestamps), an isn_source_key column can be added
+  // in v3.1.3 as Option A.
+  uniqueReschedule: uniqueIndex("reschedule_history_unique_reschedule_idx").on(
+    t.inspectionId,
+    t.previousScheduledAt,
+    t.newScheduledAt,
+  ),
 }));
 
 // =============================================================================

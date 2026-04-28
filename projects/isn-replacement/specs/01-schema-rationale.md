@@ -123,6 +123,18 @@ Alternative considered: a synthetic `id uuid` PK. Rejected because composite PK 
 
 Documented as a comment block on both tables for future developer onboarding.
 
+## v3.1.2 schema addition (2026-04-28)
+
+### Unique index on reschedule_history
+
+Added `reschedule_history_unique_reschedule_idx UNIQUE (inspection_id, previous_scheduled_at, new_scheduled_at)`.
+
+**Migration-driven reasoning:** the idempotent migration plan (spec 05) uses `ON CONFLICT ON CONSTRAINT ... DO NOTHING` to safely re-run reschedule history reconstruction. Without a DB-level constraint this is just a soft check that could fail silently.
+
+**Defense-in-depth reasoning:** even outside of migration, this constraint prevents accidental duplicate reschedule entries from any code path — application bugs, double-submissions, or replayed webhooks.
+
+**Forward path if collisions surface:** if migration prep testing finds real cases where two reschedules have identical `(inspection_id, previous_scheduled_at, new_scheduled_at)` tuples (e.g., an inspection bumped to the same-time twice due to data entry error in ISN), add `isn_source_key varchar(255)` as v3.1.3 with the ISN history event hash as the dedup key. Both paths are additive-only.
+
 ## Migration design principles (added 2026-04-27 during spec 04 lock)
 
 Two patterns surfaced during the field-mapping spec that apply broadly to any future migration work in this codebase. Captured as principles so they propagate.

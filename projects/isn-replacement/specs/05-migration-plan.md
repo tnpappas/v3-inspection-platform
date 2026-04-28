@@ -455,14 +455,14 @@ This requires the `audit_log.requestId` to be unique-where-not-null. It already 
 
 ### Reschedule history (Step 6)
 
-Natural dedup key: `(inspection_id, previous_scheduled_at, new_scheduled_at)`. Migration inserts with:
+The v3.1.2 schema adds `reschedule_history_unique_reschedule_idx UNIQUE (inspection_id, previous_scheduled_at, new_scheduled_at)`. Migration inserts with:
 
 ```sql
 INSERT INTO reschedule_history (...)
-ON CONFLICT (inspection_id, previous_scheduled_at, new_scheduled_at) DO NOTHING;
+ON CONFLICT ON CONSTRAINT reschedule_history_unique_reschedule_idx DO NOTHING;
 ```
 
-This requires a unique index on that composite. If migration prep reveals collisions (rare: two reschedules to the same timestamps), fall back to Option A: add an `isn_source_key varchar(255)` column to `reschedule_history` (schema v3.1.2 additive change). Flag the issue and decide during migration prep.
+This is a DB-enforced constraint, not a soft dedup. Re-running Step 6 is safe: rows that already exist are skipped with no side effects. If migration prep reveals real collision scenarios (two reschedules with identical from/to timestamps), an `isn_source_key varchar(255)` column can be added in v3.1.3 as Option A. Flag the issue and decide before the production migration run.
 
 ### Post-pass derivations (Step 7)
 
