@@ -15,12 +15,11 @@
 import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and } from "drizzle-orm";
+import * as fs from "fs";
 import {
   pool,
   log,
   logError,
-  isnGet,
-  isnGetThrottled,
   parseIsnDatetime,
   coerceIsnBoolean,
   normalizeIsnString,
@@ -166,25 +165,17 @@ async function main() {
     "isn_order_id", "control_name", "reason",
   ]);
 
-  // Pull all order stubs
-  log("migrate-orders", "Pulling order stubs from ISN...");
-  const openResp = await isnGet<{ orders: Array<{ id: string }> }>("/orders?completed=false");
-  const compResp = await isnGet<{ orders: Array<{ id: string }> }>("/orders?completed=true");
-  const allStubs = [...openResp.orders, ...compResp.orders];
-
-  // Deduplicate stubs (same order may appear in both lists)
-  const uniqueIds = [...new Set(allStubs.map((s) => s.id))];
-  log("migrate-orders", `Total unique order stubs: ${uniqueIds.length}`);
+  // Load orders from file produced by extract-orders.ts
+  const ORDERS_FILE = process.env.ORDERS_FILE ?? "migration/orders-full.json";
+  if (!fs.existsSync(ORDERS_FILE)) {
+    throw new Error(`Orders file not found: ${ORDERS_FILE}. Run extract-orders.ts first.`);
+  }
+  const allOrders: ISNOrderDetail[] = JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
+  log("migrate-orders", `Loaded ${allOrders.length} orders from ${ORDERS_FILE}`);
 
   let imported = 0, updated = 0, archived = 0, skipped = 0;
 
-  for (const isnOrderId of uniqueIds) {
-    const detailResp = await isnGetThrottled<{ order: ISNOrderDetail }>(
-      `/order/${isnOrderId}?withallcontrols=true&withpropertyphoto=false`
-    ).catch(() => null);
-    if (!detailResp?.order) { skipped++; continue; }
-
-    const order = detailResp.order;
+  for (const order of allOrders) {
     const { import: shouldImport, archive, skip, reason } = shouldImportOrder(order, cutoff, threeYearsAgo);
 
     if (archive) {

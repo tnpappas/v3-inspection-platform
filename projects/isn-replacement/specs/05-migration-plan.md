@@ -405,18 +405,39 @@ After Step 1 user import, apply known first-day permission overrides:
 
 ## Sequencing summary
 
-| Step | What | Dependencies |
-|---|---|---|
-| 0 | Seed reference data + account scaffolding | Empty DB with v3.1.1 schema |
-| 1 | User audit + import | Step 0 |
-| 2 | Contact split + import (agencies, customers, participants) | Step 0, Step 1 (for `created_by` FKs) |
-| 3 | Property import | Step 0, Step 1 |
-| 4 | Order migration (inspections, line items, participants) | Steps 1, 2, 3 |
-| 5 | Audit history import | Step 4 |
-| 6 | Reschedule history reconstruction | Step 5 |
-| 7 | Post-pass derivations (primaryRole, lastActivityAt) | Steps 4, 5 |
-| 8 | Day-one permission overrides | Step 1 |
-| Validation | Full validation pass | All steps complete |
+| Step | Script | What | Dependencies |
+|---|---|---|---|
+| 0 | `seed.ts` | Seed reference data + account scaffolding. Writes `migration/.env.migration`. | Empty DB with v3.1.2 schema |
+| 0.5 | `migrate-services.ts` | Import ISN ordertypes and fee catalog as v3 services. | Step 0 |
+| 1 | `migrate-users.ts` | User audit + import with roles and implicit denies | Step 0 |
+| 2 | `migrate-contacts.ts` | Agencies, customers, transaction_participants. Checkpoint-resumable for agents (set RESUME=true). | Step 0, Step 1 |
+| 2.5 | `extract-orders.ts` | Pull all order details from ISN to `migration/orders-full.json`. Set RESUME=true to continue interrupted run. | ISN API access |
+| 3 | `migrate-properties.ts` | Property dedup + import from `orders-full.json` | Step 0, Step 2.5 |
+| 4 | `migrate-orders.ts` | Order migration from `orders-full.json`: inspections, line items, participants. Archives old cancellations. | Steps 0.5, 1, 2, 3 |
+| 5+6 | `migrate-history.ts` | Audit log import + reschedule history reconstruction | Step 4 |
+| 7 | (inline) | Post-pass derivations (primaryRole, lastActivityAt) | Steps 4, 5+6 |
+| 8 | (manual) | Day-one permission overrides | Step 1 |
+| Validation | `validate-migration.ts` | Full validation pass — 20+ checks. | All steps complete |
+
+**Environment:** Source `migration/.env.migration` (produced by `seed.ts`) before running all subsequent scripts:
+```bash
+set -a && source migration/.env.migration && set +a
+```
+
+## ⚠️ Critical post-migration manual step: technician availability
+
+**The migration scripts do NOT populate technician availability.** The `technician_hours`, `technician_time_off`, and `technician_zips` tables are empty after migration completes.
+
+**Impact:** Without availability data, the slot-finding algorithm (`GET /api/calendar/available-slots`) returns no results. The system cannot suggest scheduling slots until availability is configured.
+
+**Required before going live:**
+
+1. After migration, have each inspector log in and confirm their working schedule.
+2. Operations Manager enters recurring hours via Settings → Technician Availability.
+3. Operations Manager enters ZIP coverage for each technician.
+4. Spot-check `GET /api/calendar/available-slots?businessId=...&from=...&to=...` to confirm slots are returned.
+
+**Do not cut over ISN for scheduling until at least the primary inspectors have their availability configured.** The system is functional for historical data viewing and report management before this step, but not for new scheduling.
 
 ---
 

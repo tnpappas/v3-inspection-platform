@@ -152,6 +152,18 @@ async function main() {
   }
 
   // ---- Scheduled_at timezone check (sample) ----
+  // Why this check: Postgres `date_part('timezone', col)` returns the UTC offset
+  // in SECONDS for a timestamptz column. For rows stored in UTC the offset is 0.
+  // A non-zero offset would mean a row was stored with an explicit timezone
+  // (e.g., '-08:00' Pacific) instead of being converted to UTC first, which
+  // indicates a bug in parseIsnDatetime(). This catches the most common class
+  // of timezone mishandling at migration time.
+  //
+  // Note: Postgres timestamptz columns ALWAYS store data internally as UTC;
+  // `date_part('timezone', ...)` returns 0 for all standard inserts. A non-zero
+  // result would only occur if the interval type is used in a way that preserves
+  // offset — which should not happen with our Drizzle timestamp columns. This
+  // check is therefore a broad sanity signal, not a precise validator.
   const futureUtcCheck = await q(
     `SELECT COUNT(*) FROM inspections
      WHERE business_id = $1 AND status = 'scheduled'
@@ -160,7 +172,6 @@ async function main() {
        AND date_part('timezone', scheduled_at) != 0`,
     [SAFEHOUSE_BIZ_ID]
   );
-  // All scheduled_at should be stored in UTC (timezone offset = 0)
   report("Scheduled inspections stored in UTC", Number(futureUtcCheck[0].count) === 0,
     `${futureUtcCheck[0].count} rows with non-UTC offset`);
 

@@ -14,6 +14,7 @@
 import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and } from "drizzle-orm";
+import * as fs from "fs";
 import {
   pool,
   log,
@@ -32,15 +33,31 @@ import {
   customers,
   customerBusinesses,
   transactionParticipants,
-  auditLog,
+  users,
 } from "../01-schema";
 
 const db = drizzle(pool, {
-  schema: { agencies, agencyBusinesses, customers, customerBusinesses, transactionParticipants, auditLog },
+  schema: { agencies, agencyBusinesses, customers, customerBusinesses, transactionParticipants, users },
 });
 
 const CONTACT_CSV = "migration/contact-classification.csv";
 const DEDUP_CSV = "migration/contact-dedup.csv";
+/** Checkpoint file: records ISN agent IDs that have been fully processed. */
+const CHECKPOINT_FILE = "migration/migrate-contacts-checkpoint.json";
+
+function loadCheckpoint(): Set<string> {
+  if (!fs.existsSync(CHECKPOINT_FILE)) return new Set();
+  try {
+    const data = JSON.parse(fs.readFileSync(CHECKPOINT_FILE, "utf8")) as string[];
+    return new Set(data);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCheckpoint(done: Set<string>): void {
+  fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify([...done], null, 2), "utf8");
+}
 
 async function importAgencies(
   agentList: Array<{ id: string; show?: string; agency?: string; modified?: string }>,
@@ -98,17 +115,21 @@ async function main() {
 
   const ACCOUNT_ID = process.env.MIGRATION_ACCOUNT_ID;
   const SAFEHOUSE_BIZ_ID = process.env.MIGRATION_SAFEHOUSE_BIZ_ID;
+  const RESUME = process.env.RESUME === "true";
   if (!ACCOUNT_ID || !SAFEHOUSE_BIZ_ID) {
     throw new Error("Set MIGRATION_ACCOUNT_ID and MIGRATION_SAFEHOUSE_BIZ_ID env vars");
   }
 
+  // Resolve system user via Drizzle (consistent with rest of codebase)
   const systemEmail = `system@${process.env.SEED_ACCOUNT_SLUG ?? "pappas"}.local`;
-  const systemUser = await db.query.transactionParticipants?.findFirst?.();  // dummy to get db working
-  const sysUserRow = await db.execute(
-    `SELECT id FROM users WHERE email = '${systemEmail}' LIMIT 1`
-  ) as { rows: Array<{ id: string }> };
-  const systemUserId = sysUserRow.rows[0]?.id;
+  const systemUserRow = await db.query.users?.findFirst({
+    where: (u, { eq }) => eq(u.email, systemEmail),
+  });
+  const systemUserId = systemUserRow?.id;
   if (!systemUserId) throw new Error("System user not found. Run seed.ts first.");
+
+  const checkpoint = RESUME ? loadCheckpoint() : new Set<string>();
+  if (RESUME) log("migrate-contacts", `Resuming: ${checkpoint.size} agents already processed`);
 
   writeCsvHeader(CONTACT_CSV, [
     "isn_source_type", "isn_id", "isn_name", "routed_to", "v3_id", "reason",
@@ -128,9 +149,12 @@ async function main() {
   const agencyMap = new Map<string, string>();
 
   for (const stub of agentStubs) {
+    // Skip if already processed (resume-from-checkpoint)
+    if (checkpoint.has(stub.id)) continue;
+
     const detail = await isnGetThrottled<{ agent?: Record<string, unknown> }>(`/agent/${stub.id}`)
       .catch(() => null);
-    if (!detail?.agent) continue;
+    if (!detail?.agent) { checkpoint.add(stub.id); continue; }
 
     const a = detail.agent as Record<string, string | string[] | null>;
     const isnAgencyId = a.agency as string | null;
@@ -198,8 +222,15 @@ async function main() {
       v3_id: v3Id,
       reason: "ISN agent → transaction_participant",
     });
-  }
 
+    // Mark as done and save checkpoint every 50 agents
+    checkpoint.add(stub.id);
+    if (checkpoint.size % 50 === 0) {
+      saveCheckpoint(checkpoint);
+      log("migrate-contacts", `Checkpoint saved: ${checkpoint.size} agents processed`);
+    }
+  }
+  saveCheckpoint(checkpoint);
   log("migrate-contacts", `Agents: ${agentsImported} imported, ${agentsUpdated} updated`);
 
   // ---- Clients (→ customers) ----

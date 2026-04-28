@@ -521,6 +521,16 @@ Application logic enforces required-by-status: cannot transition to `in_progress
 
 ### Order number generation
 
+**Year-in-format derived from the ISN order's `datetime` field, not the migration run date.** An inspection from 2023 gets `SH-2023-000XXX`, not `SH-2026-000XXX`. This preserves historical accuracy in the order number format: staff can see from the order number when the inspection occurred. The sequence itself is monotonic across years; the year is only a format label.
+
+The migration script implements this as:
+```ts
+const year = scheduledAtDate?.getFullYear() ?? new Date().getFullYear();
+const orderNumber = `SH-${year}-${seq.padStart(6, '0')}`;
+```
+
+Possible collision: if the sequence for a given business ever exceeds 999,999 in a single year prefix, the format overflows. At Safe House's current volume (about 1,950/year), this won't happen for 512+ years per business. The format can be widened trivially if needed.
+
 **Format:** `${businessPrefix}-${currentYear}-${seq:06d}`. Example: `SH-2026-001234`, `HCJ-2026-000045`.
 
 **Generation strategy:**

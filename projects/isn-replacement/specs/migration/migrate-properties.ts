@@ -6,13 +6,10 @@
  * inserts properties and property_businesses junctions.
  * Idempotent via propertyDedupeKey lookup.
  *
- * NOTE: For a full migration, this script must be run AFTER the orders have
- * been pulled from ISN (via the full order crawl, not just the 15 pilot
- * samples in discovery/raw/phase2). During migration prep, pull all qualifying
- * orders to a local JSON file and point ORDERS_FILE at it.
+ * Reads from migration/orders-full.json produced by extract-orders.ts.
+ * Run extract-orders.ts before this script.
  *
  * Run: npx tsx specs/migration/migrate-properties.ts
- * Requires: ORDERS_FILE env var pointing at the full orders JSON dump.
  * Output: migration/property-dedup.csv (gitignored)
  */
 
@@ -36,14 +33,31 @@ const db = drizzle(pool, { schema: { properties, propertyBusinesses } });
 
 const DEDUP_CSV = "migration/property-dedup.csv";
 
-/** ISN foundation UUID → controlled vocabulary string.
- * Built from the one-time foundation lookup pull during migration prep.
- * Populate this map before running the full migration.
+/**
+ * ISN foundation UUID → controlled vocabulary string.
+ *
+ * Populated from the 2 distinct foundation UUIDs observed across 23 sampled
+ * ISN orders (Phase 2 discovery + augment). ISN does not expose a public
+ * foundations API endpoint; this map was derived from field context:
+ *
+ *   5d8fbc5c... — appears on 10/23 sampled orders (larger/older homes).
+ *     Virginia Beach residential context → likely "crawl_space" (dominant
+ *     foundation type in Hampton Roads due to high water table).
+ *
+ *   d7010b32... — appears on 5/23 sampled orders (varied property types).
+ *     Likely "slab" (second most common in the area).
+ *
+ * ⚠️  VERIFY BEFORE PRODUCTION MIGRATION: Open the ISN admin panel,
+ *     navigate to Settings → Property Attributes → Foundation Types, and
+ *     confirm these UUIDs match the displayed names. If they don't, correct
+ *     this map and re-run migrate-properties.ts (idempotent).
+ *
+ * Any foundation UUID not in this map translates to null (unknown).
+ * Staff can update property records via the v3 UI post-migration.
  */
 const FOUNDATION_MAP: Record<string, string> = {
-  // Example entries — populate from ISN API during migration prep
-  // "5d8fbc5c-b2d3-4319-9610-ed962af3f25d": "slab",
-  // Add all foundation UUIDs observed in the data
+  "5d8fbc5c-b2d3-4319-9610-ed962af3f25d": "crawl_space",  // 10/23 sampled — verify in ISN admin
+  "d7010b32-2d6c-42bf-959b-a5935b09b247": "slab",          //  5/23 sampled — verify in ISN admin
 };
 
 export function translateIsnFoundation(uuid: string | null | undefined): string | null {
@@ -90,13 +104,13 @@ async function main() {
 
   const ACCOUNT_ID = process.env.MIGRATION_ACCOUNT_ID;
   const SAFEHOUSE_BIZ_ID = process.env.MIGRATION_SAFEHOUSE_BIZ_ID;
-  const ORDERS_FILE = process.env.ORDERS_FILE;
+  const ORDERS_FILE = process.env.ORDERS_FILE ?? "migration/orders-full.json";
 
   if (!ACCOUNT_ID || !SAFEHOUSE_BIZ_ID) {
     throw new Error("Set MIGRATION_ACCOUNT_ID and MIGRATION_SAFEHOUSE_BIZ_ID");
   }
-  if (!ORDERS_FILE || !fs.existsSync(ORDERS_FILE)) {
-    throw new Error(`ORDERS_FILE not found: ${ORDERS_FILE ?? "(not set)"}. Pull full orders during migration prep.`);
+  if (!fs.existsSync(ORDERS_FILE)) {
+    throw new Error(`Orders file not found: ${ORDERS_FILE}. Run extract-orders.ts first.`);
   }
 
   writeCsvHeader(DEDUP_CSV, [
