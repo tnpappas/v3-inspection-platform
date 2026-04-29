@@ -1,0 +1,63 @@
+{
+  "name": "@v3/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./rls": {
+      "types": "./dist/rls.d.ts",
+      "default": "./dist/rls.js"
+    },
+    "./helpers": {
+      "types": "./dist/helpers.d.ts",
+      "default": "./dist/helpers.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "drizzle:generate": "drizzle-kit generate",
+    "drizzle:migrate": "drizzle-kit migrate",
+    "drizzle:studio": "drizzle-kit studio",
+    "seed": "tsx scripts/seed.ts",
+    "migrate:users": "tsx scripts/migrate-users.ts",
+    "migrate:contacts": "tsx scripts/migrate-contacts.ts",
+    "migrate:properties": "tsx scripts/migrate-properties.ts",
+    "migrate:services": "tsx scripts/migrate-services.ts",
+    "migrate:orders": "tsx scripts/migrate-orders.ts",
+    "migrate:history": "tsx scripts/migrate-history.ts",
+    "migrate:notes": "tsx scripts/migrate-notes.ts",
+    "migrate:archive": "tsx scripts/archive-cancellations.ts",
+    "migrate:validate": "tsx scripts/validate-migration.ts",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "@v3/types": "workspace:*",
+    "drizzle-orm": "^0.36.4",
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.28.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

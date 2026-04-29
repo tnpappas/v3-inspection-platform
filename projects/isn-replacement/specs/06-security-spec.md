@@ -1,6 +1,6 @@
 # Security Spec
 
-_Status: STUB. Captures the principle-1 requirements set by Troy 2026-04-27 11:52 UTC. Filled out fully after the schema review locks._
+_Status: LOCKED 2026-04-29. S1 through S11 documented and approved alongside Phase 1 directive. Companion to `specs/01-schema.ts` (v3.1.3) and `specs/02-api-contract.yaml`. Subsequent updates land additively._
 
 ## Principle
 

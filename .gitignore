@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# Test output
+coverage/
+.nyc_output/
+
+# Environment files (Doppler is the source of truth; .env files are local-only fallbacks)
+.env
+.env.local
+.env.*.local
+.env.migration
+
+# Doppler local config
+.doppler.yaml.local
+
+# Migration outputs (PII-containing CSVs from migration runs)
+migration/*.csv
+migration/dropped-scripts.csv
+
+# Worktrees and harness state
+.claude/
+
+# Editor / OS
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# Sentry
+.sentryclirc
+
+# Replit deployment artifacts (when this repo is pulled to Replit)
+.replit
+replit.nix
+
+# Generated OpenAPI / docs
+docs/api/generated/
