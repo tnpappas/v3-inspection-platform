@@ -34,7 +34,7 @@ import {
   customerBusinesses,
   transactionParticipants,
   users,
-} from "../01-schema";
+} from "../src/schema";
 
 const db = drizzle(pool, {
   schema: { agencies, agencyBusinesses, customers, customerBusinesses, transactionParticipants, users },

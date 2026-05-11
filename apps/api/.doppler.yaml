@@ -1,0 +1,3 @@
+setup:
+  - project: v3-api
+    config: dev

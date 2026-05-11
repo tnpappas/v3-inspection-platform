@@ -24,7 +24,7 @@ import {
   isnEventHash,
   ISNOrderDetail,
 } from "./helpers";
-import { auditLog, rescheduleHistory } from "../01-schema";
+import { auditLog, rescheduleHistory } from "../src/schema";
 
 const db = drizzle(pool, { schema: { auditLog, rescheduleHistory } });
 

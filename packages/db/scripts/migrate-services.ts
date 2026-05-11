@@ -27,7 +27,7 @@ import {
   defaultDurationForBusinessType,
   PerAccountConfig,
 } from "./helpers";
-import { services } from "../01-schema";
+import { services } from "../src/schema";
 
 const db = drizzle(pool, { schema: { services } });
 

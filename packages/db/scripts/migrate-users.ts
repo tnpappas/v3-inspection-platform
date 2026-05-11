@@ -33,8 +33,8 @@ import {
   userRoles,
   userPermissionOverrides,
   auditLog,
-} from "../01-schema";
-import { ROLE_IMPLICIT_DENIES } from "../shared/schemas/permissions-seed";
+} from "../src/schema";
+import { ROLE_IMPLICIT_DENIES } from "@v3/permissions/catalog";
 
 const db = drizzle(pool, { schema: { users, userCredentials, userBusinesses, userRoles, userPermissionOverrides, auditLog } });
 

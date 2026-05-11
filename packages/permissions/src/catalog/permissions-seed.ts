@@ -13,7 +13,7 @@
  * `06-security-spec.md` S11 for the design.
  */
 
-import type { Role } from "../../01-schema";
+import type { Role } from "@v3/db/schema";
 
 // =============================================================================
 // PERMISSIONS_SEED

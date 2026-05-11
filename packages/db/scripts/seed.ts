@@ -21,7 +21,7 @@ import {
   verifyAdminAccountAdminInvariant,
   verifyPermissionKeyExistence,
   verifyGroupKeyExistence,
-} from "../shared/schemas/permissions-seed";
+} from "@v3/permissions/catalog";
 import {
   accounts,
   users,
@@ -31,7 +31,7 @@ import {
   permissionGroupMembers,
   rolePermissions,
   auditLog,
-} from "../01-schema";
+} from "../src/schema";
 
 const db = drizzle(pool, { schema: { accounts, users, businesses, permissions, permissionGroups, permissionGroupMembers, rolePermissions, auditLog } });
 

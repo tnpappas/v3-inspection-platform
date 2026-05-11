@@ -1,12 +1,18 @@
-// Drizzle Kit config. Reads DATABASE_URL_UNPOOLED from env (set by Doppler in dev/ci/prd).
-// Schema source moves from projects/isn-replacement/specs/01-schema.ts to ./src/schema.ts on Day 2.
+// Drizzle Kit config.
+//
+// - `generate` compiles schema.ts to SQL and does NOT need a live DB. It runs
+//   fine with a placeholder URL.
+// - `migrate` / `push` / `studio` connect to the DB and require a real URL.
+//
+// DATABASE_URL_UNPOOLED is provided by Doppler v3-migrations config in dev/stg/prd/ci.
+// Use `doppler run -- pnpm drizzle:migrate` (etc.) when running anything that touches the DB.
 
 import { defineConfig } from 'drizzle-kit';
 
-const databaseUrl = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL_UNPOOLED (or DATABASE_URL) must be set. Use `doppler run -- pnpm drizzle:generate`.');
-}
+const databaseUrl =
+  process.env.DATABASE_URL_UNPOOLED ??
+  process.env.DATABASE_URL ??
+  'postgresql://placeholder:placeholder@localhost:5432/placeholder';
 
 export default defineConfig({
   schema: './src/schema.ts',

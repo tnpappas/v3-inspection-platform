@@ -27,7 +27,7 @@ import {
   writeCsvLine,
   ISNOrderDetail,
 } from "./helpers";
-import { properties, propertyBusinesses } from "../01-schema";
+import { properties, propertyBusinesses } from "../src/schema";
 
 const db = drizzle(pool, { schema: { properties, propertyBusinesses } });
 
