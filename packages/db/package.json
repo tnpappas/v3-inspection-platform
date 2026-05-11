@@ -3,28 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
     "./schema": {
-      "types": "./dist/schema.d.ts",
-      "default": "./dist/schema.js"
+      "types": "./src/schema.ts",
+      "default": "./src/schema.ts"
     },
     "./client": {
-      "types": "./dist/client.d.ts",
-      "default": "./dist/client.js"
+      "types": "./src/client.ts",
+      "default": "./src/client.ts"
     },
     "./rls": {
-      "types": "./dist/rls.d.ts",
-      "default": "./dist/rls.js"
+      "types": "./src/rls.ts",
+      "default": "./src/rls.ts"
     },
     "./helpers": {
-      "types": "./dist/helpers.d.ts",
-      "default": "./dist/helpers.js"
+      "types": "./src/helpers.ts",
+      "default": "./src/helpers.ts"
     }
   },
   "scripts": {
@@ -50,12 +50,14 @@
     "@neondatabase/serverless": "^0.10.4",
     "@v3/types": "workspace:*",
     "drizzle-orm": "^0.36.4",
-    "drizzle-zod": "^0.8.3",
+    "drizzle-zod": "^0.5.1",
     "pg": "^8.13.1",
+    "ws": "^8.18.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
+    "@types/ws": "^8.5.13",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",

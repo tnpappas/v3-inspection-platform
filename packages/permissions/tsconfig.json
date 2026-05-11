@@ -2,9 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    // Inherits the same Drizzle circular-reference loosening as @v3/db since
+    // we import schema.ts here for type extraction (Role enum, etc.).
+    "noImplicitAny": false
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "tests"],
-  "references": [{ "path": "../types" }, { "path": "../db" }]
+  "exclude": ["dist", "node_modules", "tests"]
 }

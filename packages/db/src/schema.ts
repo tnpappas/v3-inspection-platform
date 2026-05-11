@@ -110,7 +110,6 @@ import {
   decimal,
   jsonb,
   uuid,
-  bigint,
   inet,
   primaryKey,
   index,
@@ -119,8 +118,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-import { accountConfigSchema, type AccountConfig } from "../../types/src/config/account-config";
-import { businessConfigSchema, type BusinessConfig } from "../../types/src/config/business-config";
+import { accountConfigSchema, type AccountConfig } from "@v3/types/config/account-config";
+import { businessConfigSchema, type BusinessConfig } from "@v3/types/config/business-config";
 
 // =============================================================================
 // Enums (DB-layer enforcement per Troy 2026-04-27)
@@ -143,6 +142,8 @@ export const roleEnum = pgEnum("role", [
   "bookkeeper",
   "viewer",
 ]);
+/** Type alias for the role enum values. Used by permissions catalog. */
+export type Role = (typeof roleEnum.enumValues)[number];
 
 export const customerStatusEnum = pgEnum("customer_status", ["active", "inactive"]);
 export const contactRelationshipStatusEnum = pgEnum("contact_relationship_status", ["active", "inactive"]);

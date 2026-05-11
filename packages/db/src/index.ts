@@ -1,7 +1,19 @@
-// Day 1 stub. Day 2 wires:
-//   - schema.ts: moved from projects/isn-replacement/specs/01-schema.ts
-//   - client.ts: Drizzle client factory (HTTP for apps/api, long-session for migrations)
-//   - rls.ts: withAccountContext / withBusinessContext helpers per security spec S1, S9
-//   - helpers.ts: parseIsnDatetime, coerceIsnBoolean, etc. (moved from specs/migration/helpers.ts)
-
-export {};
+/**
+ * @v3/db root barrel.
+ *
+ * Subpath imports (recommended for tree-shaking):
+ *   import { inspections } from '@v3/db/schema';
+ *   import { getDb } from '@v3/db/client';
+ *   import { withRlsContext } from '@v3/db/rls';
+ *
+ * Or import everything from the root:
+ *   import { schema, getDb, withRlsContext } from '@v3/db';
+ */
+export * as schema from './schema.js';
+export { getDb, closeDb, type Db } from './client.js';
+export {
+  withRlsContext,
+  withoutRlsContext,
+  type RlsContext,
+  type RlsTransaction,
+} from './rls.js';

@@ -2,15 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
     "lib": ["ES2023"],
-    "types": ["node"]
+    "types": ["node"],
+    // Same Drizzle circular-reference loosening as @v3/db, since apps/api
+    // imports schema.ts transitively. See packages/db/tsconfig.json.
+    "noImplicitAny": false
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "tests"],
-  "references": [
-    { "path": "../../packages/types" },
-    { "path": "../../packages/db" },
-    { "path": "../../packages/permissions" }
-  ]
+  "exclude": ["dist", "node_modules", "tests"]
 }

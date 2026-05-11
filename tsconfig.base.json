@@ -18,10 +18,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
-    "declaration": true,
-    "declarationMap": true,
     "sourceMap": true,
-    "incremental": true,
-    "composite": true
+    "noEmit": true
   }
 }

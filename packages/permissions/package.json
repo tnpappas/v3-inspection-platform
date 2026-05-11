@@ -3,24 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     },
     "./catalog": {
-      "types": "./dist/catalog.d.ts",
-      "default": "./dist/catalog.js"
+      "types": "./src/catalog/index.ts",
+      "default": "./src/catalog/index.ts"
     },
     "./resolver": {
-      "types": "./dist/resolver.d.ts",
-      "default": "./dist/resolver.js"
+      "types": "./src/resolver.ts",
+      "default": "./src/resolver.ts"
     },
     "./middleware": {
-      "types": "./dist/middleware.d.ts",
-      "default": "./dist/middleware.js"
+      "types": "./src/middleware.ts",
+      "default": "./src/middleware.ts"
     }
   },
   "scripts": {
