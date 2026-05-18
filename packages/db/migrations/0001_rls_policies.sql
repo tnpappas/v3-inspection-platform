@@ -170,8 +170,10 @@ CREATE POLICY technician_zips_business_isolation ON technician_zips
 
 ALTER TABLE technician_service_durations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE technician_service_durations FORCE ROW LEVEL SECURITY;
+-- technician_service_durations has no direct business_id (PK is user_id+service_id);
+-- chain through services.business_id. Same pattern as inspection_* tables below.
 CREATE POLICY technician_service_durations_business_isolation ON technician_service_durations
-  USING (business_id = ANY(app_user_business_ids()));
+  USING (service_id IN (SELECT id FROM services WHERE business_id = ANY(app_user_business_ids())));
 
 ALTER TABLE inspections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inspections FORCE ROW LEVEL SECURITY;

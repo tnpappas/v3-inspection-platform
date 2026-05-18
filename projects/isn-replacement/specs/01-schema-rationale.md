@@ -213,6 +213,8 @@ Transaction participants (realtors, transaction coordinators, escrow officers, l
 
 Row-level security policies on every account-scoped and business-scoped table enforce isolation at the database layer, not just in the application. Session-variable misconfigurations result in zero rows returned, the safe failure mode.
 
+`technician_service_durations` is the one table in the technician group without a direct `business_id` column (its PK is `user_id + service_id`, the duration override is intrinsically a property of the service). Its RLS policy chains through `services.business_id` rather than reading a denormalized column. Same pattern as the `inspection_*` and `reschedule_history` tables, which chain through `inspections.business_id` via their `inspection_id` FK.
+
 ### Soft-delete pattern
 
 Tables holding PII or operational history carry `deletedAt`, `deletedBy`, `deleteReason` columns and a `deleted_at_idx` index. Hard delete is reserved for retention jobs and explicit admin actions, both audit-logged.
